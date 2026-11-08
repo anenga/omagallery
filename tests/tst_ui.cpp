@@ -2274,10 +2274,19 @@ private slots:
     const double zoom = item("detail")->property("imageZoom").toDouble();
     QTest::keyClick(m_window, Qt::Key_Space);
     QCOMPARE(item("detail")->property("imageZoom").toDouble(), zoom);
+    const QString picture = item("detail")->property("path").toString();
     invoke("dismissTopLayer");
+    QTRY_VERIFY(!item("detail")->isVisible());
+    QTRY_VERIFY(item("library")->hasActiveFocus());
+    // A scan landing late can insert rows; keep Space on the same picture.
+    item("library")->setProperty("currentIndex", m_library->rowOf(picture));
+    QCOMPARE(pathAt(item("library")->property("currentIndex").toInt()), picture);
     m_settings->setImagePrimaryAction(QStringLiteral("matte"));
     QTest::keyClick(m_window, Qt::Key_Space);
-    QTRY_VERIFY(item("matteSheet")->isVisible());
+    QTRY_VERIFY2(item("matteSheet")->isVisible(),
+                 qPrintable(QStringLiteral("detail open: %1, current: %2")
+                                .arg(item("detail")->isVisible())
+                                .arg(pathAt(item("library")->property("currentIndex").toInt()))));
   }
 
   void clickOutsideTheLibraryBrowserIsConsumed() {

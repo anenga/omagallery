@@ -3,12 +3,19 @@
 #include "sources/DisplayColors.h"
 #include "thumbs/ThumbnailCache.h"
 
+#include <QElapsedTimer>
+#include <QFileInfo>
+#include <QLoggingCategory>
 #include <QMetaObject>
 #include <QRunnable>
 #include <QThread>
 #include <QUrl>
 
 #include <atomic>
+
+// QT_LOGGING_RULES="omaroll.thumbnails.debug=true" times every tile, to tell
+// a slow share from a stuck read or a tile that will never come.
+Q_LOGGING_CATEGORY(lcThumbnails, "omaroll.thumbnails", QtWarningMsg)
 
 namespace {
 
@@ -53,8 +60,18 @@ public:
       finishOnOwnThread();
       return;
     }
+    QElapsedTimer elapsed;
+    elapsed.start();
     QImage image = ThumbnailCache::thumbnail(m_path, m_logicalSize, m_devicePixelRatio,
                                             m_seekPercent, cancelled, m_version);
+    qCDebug(lcThumbnails).noquote()
+        << QStringLiteral("%1 ms %2 %3 bytes %4")
+               .arg(elapsed.elapsed())
+               .arg(cancelled.isCancelled() ? QStringLiteral("cancelled")
+                    : image.isNull()        ? QStringLiteral("failed")
+                                            : QStringLiteral("ok"))
+               .arg(QFileInfo(m_path).size())
+               .arg(m_path);
     if (cancelled.isCancelled()) {
       m_error = QStringLiteral("Cancelled");
     } else if (image.isNull()) {
