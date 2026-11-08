@@ -735,6 +735,11 @@ ApplicationWindow {
             return
         }
         if (confirm.visible || permanentConfirm.visible || editorChooser.visible) return
+        const problem = Actions.trashProblem(Session.deletionPath)
+        if (problem !== "") {
+            root.say(problem)
+            return
+        }
         confirm.path = Session.deletionPath
         confirm.viewedPath = Session.path
         confirm.detail = confirm.path

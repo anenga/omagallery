@@ -2,6 +2,7 @@
 #include "edit/ClipboardText.h"
 #include "actions/OpenWithRequest.h"
 #include "app/VideoPlayback.h"
+#include "sources/Trash.h"
 #include "edit/ClipboardText.h"
 #include "sources/FileVersion.h"
 
@@ -540,22 +541,17 @@ bool ActionLauncher::open(const QString& path) {
 }
 
 bool ActionLauncher::moveToTrash(const QString& path) {
-  if (!QFileInfo::exists(path)) {
-    emit failed(u"That file is no longer there"_s);
-    return false;
-  }
-
-  // Qt creates Trash/files and Trash/info, but expects the XDG data-home
-  // parent to exist. A genuinely fresh account may not have used it yet.
-  QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
-  if (!QFile::moveToTrash(path)) {
-    // Most often a trash directory that does not exist on the volume the file
-    // lives on, which is worth saying rather than hiding behind "failed".
-    emit failed(u"Could not move this file to Trash. Its volume may not support Trash"_s);
+  // A volume with no Trash of its own (a network share) goes to the home
+  // Trash by a verified copy; see Trash::move.
+  QString error;
+  if (!Trash::move(path, &error)) {
+    emit failed(error);
     return false;
   }
   return true;
 }
+
+QString ActionLauncher::trashProblem(const QString& path) const { return Trash::problem(path); }
 
 QVariantMap ActionLauncher::captureFileAction(const QString& path, const QString& expectedMediaPath) {
   QVariantMap target = capturePermanentDelete(path, expectedMediaPath);
@@ -641,7 +637,7 @@ void ActionLauncher::moveDuplicateCopiesToTrash(const QVariantMap& keep, const Q
       }
       // Check versions again after reading, immediately before the move.
       identical = identical && copy.atEnd() && capturedFileMatches(keep) && capturedFileMatches(target);
-      if (identical && QFile::moveToTrash(path)) ++moved;
+      if (identical && Trash::move(path)) ++moved;
       else skipped.append(path);
     }
     return QVariantMap{{u"moved"_s, moved}, {u"skipped"_s, skipped}};

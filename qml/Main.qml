@@ -630,6 +630,12 @@ ApplicationWindow {
         if (path === "") return
         const target = root.captureTrashTarget(path)
         if (target.path === undefined) return
+        // Say so now, rather than after a prompt for a move that cannot work.
+        const problem = Actions.trashProblem(target.path)
+        if (problem !== "") {
+            root.say(problem)
+            return
+        }
         root.pendingDeleteTarget = target
         root.pendingDeleteBatch = []
         root.pendingDuplicateKeep = ({})
@@ -653,6 +659,11 @@ ApplicationWindow {
         for (const path of paths) {
             const target = root.captureTrashTarget(path)
             if (target.path === undefined) return
+            const problem = Actions.trashProblem(target.path)
+            if (problem !== "") {
+                root.say(paths.length > 1 ? problem + "; nothing was moved" : problem)
+                return
+            }
             targets.push(target)
         }
         root.pendingDeleteTarget = ({})
@@ -1866,6 +1877,10 @@ ApplicationWindow {
             Library.addExtraFiles([outputPath])
             Library.refresh()
             root.say("Saved a corrected copy beside the original")
+        }
+        function onCopyKept(outputPath, jobId) {
+            Library.addExtraFiles([outputPath])
+            Library.refresh()
         }
         function onBatchFinished(succeeded, failed, results, jobId) {
             const outputs = []

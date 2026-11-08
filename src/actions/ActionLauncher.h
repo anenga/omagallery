@@ -46,6 +46,9 @@ public:
 
   // Ordinary Delete uses recoverable XDG Trash.
   Q_INVOKABLE bool moveToTrash(const QString& path);
+  // Why |path| cannot go to Trash (a read-only folder, a missing file), or
+  // empty, so a prompt is not offered for a move that cannot happen.
+  Q_INVOKABLE QString trashProblem(const QString& path) const;
   Q_INVOKABLE QVariantMap captureFileAction(const QString& path,
                                             const QString& expectedMediaPath = {});
   Q_INVOKABLE bool moveCapturedToTrash(const QVariantMap& target);

@@ -38,6 +38,7 @@
 #include "sources/CameraRaw.h"
 #include "sources/CaptureLocations.h"
 #include "sources/CaptureScanner.h"
+#include "sources/Trash.h"
 #include "sources/FileVersion.h"
 #include "theme/OmarchyTheme.h"
 #include "thumbs/ThumbnailCache.h"
@@ -9158,6 +9159,63 @@ private slots:
     const int cast = qRed(light) - qBlue(light);
     QVERIFY2(cast >= 0 && cast < 35, qPrintable(QString::number(cast)));
     QVERIFY(TouchUp::autoFix(QImage()).isNull());
+  }
+
+  void trashWithoutAVolumeTrashCopiesIntoTheHomeTrash() {
+    // As on a network share with no Trash of its own: the move goes to the
+    // home Trash by a checked copy, restorable to where it was.
+    QTemporaryDir share;
+    QTemporaryDir home;
+    QVERIFY(share.isValid() && home.isValid());
+    const QByteArray previous = qgetenv("OMAROLL_HOME_TRASH");
+    const auto restore = qScopeGuard([previous] {
+      if (previous.isEmpty()) qunsetenv("OMAROLL_HOME_TRASH");
+      else qputenv("OMAROLL_HOME_TRASH", previous);
+    });
+    qputenv("OMAROLL_HOME_TRASH", home.path().toLocal8Bit());
+    QCOMPARE(Trash::homeTrash(), home.path());
+
+    QByteArray bytes(3 * 1024 * 1024 + 17, Qt::Uninitialized);
+    for (qsizetype i = 0; i < bytes.size(); ++i) bytes[i] = char((i * 31) % 251);
+    const QString first = share.filePath(QStringLiteral("Print 1985.jpg"));
+    for (const QString& path : {first, share.filePath(QStringLiteral("other/Print 1985.jpg"))}) {
+      QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+      QFile file(path);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      QCOMPARE(file.write(bytes), bytes.size());
+    }
+
+    QString error;
+    QVERIFY2(Trash::move(first, &error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(first));
+    QFile kept(home.filePath(QStringLiteral("files/Print 1985.jpg")));
+    QVERIFY(kept.open(QIODevice::ReadOnly));
+    QCOMPARE(kept.readAll(), bytes);
+    QFile record(home.filePath(QStringLiteral("info/Print 1985.jpg.trashinfo")));
+    QVERIFY(record.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(record.readAll());
+    QVERIFY(text.startsWith(QStringLiteral("[Trash Info]\n")));
+    QVERIFY2(text.contains(QStringLiteral("Path=") + QString::fromLatin1(QUrl::toPercentEncoding(first, "/"))),
+             qPrintable(text));
+    QVERIFY(text.contains(QStringLiteral("DeletionDate=")));
+
+    // The same name again takes the next free one, never overwriting.
+    const QString second = share.filePath(QStringLiteral("other/Print 1985.jpg"));
+    QVERIFY(Trash::move(second, &error));
+    QVERIFY(QFileInfo::exists(home.filePath(QStringLiteral("files/Print 1985.2.jpg"))));
+    QVERIFY(QFileInfo::exists(home.filePath(QStringLiteral("info/Print 1985.2.jpg.trashinfo"))));
+
+    // When the home Trash cannot take it, the original stays put.
+    const QString third = share.filePath(QStringLiteral("third.jpg"));
+    QVERIFY(QFile::copy(home.filePath(QStringLiteral("files/Print 1985.jpg")), third));
+    qputenv("OMAROLL_HOME_TRASH", share.filePath(QStringLiteral("third.jpg/not-a-folder")).toLocal8Bit());
+    QVERIFY(!Trash::move(third, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(QFileInfo::exists(third));
+    QCOMPARE(QFileInfo(third).size(), bytes.size());
+
+    QVERIFY(!Trash::problem(share.filePath(QStringLiteral("gone.jpg"))).isEmpty());
+    QVERIFY(Trash::problem(third).isEmpty());
   }
 
   void touchUpGeneratedUprezIsSavedWithoutRunningAgain() {

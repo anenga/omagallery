@@ -49,6 +49,8 @@ add_library(omaroll_core STATIC
   src/sources/DisplayColors.h
   src/sources/FileVersion.h
   src/sources/ImageBudget.cpp
+  src/sources/Trash.cpp
+  src/sources/Trash.h
   src/sources/ImageBudget.h
   src/actions/ActionLauncher.cpp
   src/actions/ActionLauncher.h

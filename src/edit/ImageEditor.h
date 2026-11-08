@@ -158,6 +158,9 @@ signals:
   void batchProgress(int done, int total, int jobId);
   void touchUpProgress(qreal fraction, int jobId);
   void upscaleReady(const QString& previewUrl, const QSize& size, int jobId);
+  // A save over the original failed after its copy was written; the copy
+  // stays beside the original. failed() follows with why.
+  void copyKept(const QString& outputPath, int jobId);
   void batchFinished(int succeeded, int failed, const QVariantList& results, int jobId);
 
 private:

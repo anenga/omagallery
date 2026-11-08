@@ -5,6 +5,7 @@
 #include "edit/JpegTransform.h"
 #include "edit/TouchUp.h"
 #include "edit/Upscaler.h"
+#include "sources/Trash.h"
 #include "sources/CameraRaw.h"
 #include "sources/CaptureScanner.h"
 #include "sources/ImageBudget.h"
@@ -108,9 +109,9 @@ SaveResult replaceOriginal(const QString& source, const QString& written) {
   // keeps the original's: it stays where it was instead of jumping to the
   // top as the newest picture.
   const QDateTime modified = QFileInfo(source).lastModified();
-  if (!QFile::moveToTrash(source)) {
-    return {written, QStringLiteral("Could not move the original to the Trash; saved as %1 instead")
-                         .arg(name)};
+  QString why;
+  if (!Trash::move(source, &why)) {
+    return {written, QStringLiteral("%1; saved as %2 instead").arg(why, name)};
   }
   if (!QFile::rename(written, source)) {
     return {written, QStringLiteral("The original is in the Trash, but the new picture is %1")
@@ -394,8 +395,14 @@ void ImageEditor::replaceWithTurn(const QString& path, int quarterTurns, bool fl
         [this, output, error, jobId] {
           m_busy = false;
           emit busyChanged();
-          if (!error.isEmpty()) emit failed(error, jobId);
-          else emit saved(output, jobId);
+          if (!error.isEmpty()) {
+            // The corrected copy was written but could not take the
+            // original's place; it stays, so the library should show it.
+            if (!output.isEmpty() && QFileInfo::exists(output)) emit copyKept(output, jobId);
+            emit failed(error, jobId);
+          } else {
+            emit saved(output, jobId);
+          }
         },
         Qt::QueuedConnection);
   });
@@ -605,6 +612,7 @@ void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor,
           m_busy = false;
           emit busyChanged();
           if (!error.isEmpty()) {
+            if (!output.isEmpty() && QFileInfo::exists(output)) emit copyKept(output, jobId);
             emit failed(error, jobId);
           } else {
             emit saved(output, jobId);

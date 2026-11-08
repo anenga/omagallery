@@ -759,6 +759,41 @@ private slots:
     QTRY_VERIFY(!object->property("thumbnailFailed").toBool());
   }
 
+  void trashOnAShareWithoutTrashStillLeavesTheGallery() {
+    // A network share has no Trash; the picture goes to the home Trash by a
+    // copy, and leaves the gallery the same as a local move.
+    QTemporaryDir share;
+    QTemporaryDir home;
+    const QString path = share.filePath(QStringLiteral("share-trash.png"));
+    QImage image(30, 20, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    QVERIFY(image.save(path));
+    m_disposablePaths.append(path);
+    const QByteArray previous = qgetenv("OMAROLL_HOME_TRASH");
+    const bool asked = m_settings->confirmTrash();
+    const auto cleanup = qScopeGuard([&] {
+      if (previous.isEmpty()) qunsetenv("OMAROLL_HOME_TRASH");
+      else qputenv("OMAROLL_HOME_TRASH", previous);
+      m_settings->setConfirmTrash(asked);
+      invoke("dismissTopLayer");
+      m_captures->refresh();
+      QTRY_VERIFY(!m_captures->scanning());
+    });
+    qputenv("OMAROLL_HOME_TRASH", home.path().toLocal8Bit());
+    m_settings->setConfirmTrash(true);
+    m_captures->addExtraFiles({path});
+    QTRY_VERIFY(m_library->rowOf(path) >= 0);
+
+    QVERIFY(QMetaObject::invokeMethod(m_window, "requestDelete", Q_ARG(QVariant, path)));
+    QTRY_VERIFY(item("confirm")->isVisible());
+    QTest::keyClick(m_window, Qt::Key_Return);
+    QTRY_VERIFY(!item("confirm")->isVisible());
+    QTRY_VERIFY(!QFileInfo::exists(path));
+    QVERIFY(QFileInfo::exists(home.filePath(QStringLiteral("files/share-trash.png"))));
+    QTRY_VERIFY_WITH_TIMEOUT(m_captures->rowOf(path) < 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(m_library->rowOf(path) < 0, 10000);
+  }
+
   void failedTrashTargetsRemainChecked() {
     QTemporaryDir dir;
     const QString good = dir.filePath(QStringLiteral("trash-good.png"));
