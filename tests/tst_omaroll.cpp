@@ -9226,18 +9226,22 @@ private slots:
     const QString bin = work.filePath(QStringLiteral("bin"));
     QVERIFY(QDir().mkpath(bin));
     const QString tool = bin + QLatin1Char('/') + QString::fromLatin1(Upscaler::kProgram);
+    const QString cp = QStandardPaths::findExecutable(QStringLiteral("cp"));
+    QVERIFY(!cp.isEmpty());
     {
       QFile script(tool);
       QVERIFY(script.open(QIODevice::WriteOnly));
       script.write("#!/bin/sh\n"
                    "while [ $# -gt 0 ]; do case $1 in -i) i=$2; shift;; -o) o=$2; shift;; esac; shift; done\n"
-                   "echo '50.00%' >&2\n"
-                   "cp \"$i\" \"$o\"\n");
+                   "echo '50.00%' >&2\n" +
+                   cp.toLocal8Bit() + " \"$i\" \"$o\"\n");
     }
     QVERIFY(QFile::setPermissions(tool, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
     const QByteArray path = qgetenv("PATH");
     const auto restorePath = qScopeGuard([path] { qputenv("PATH", path); });
-    qputenv("PATH", bin.toLocal8Bit() + ':' + path);
+    // Only the stand-in: a real Real-ESRGAN installed on this machine must
+    // not be found once the stand-in is removed.
+    qputenv("PATH", bin.toLocal8Bit());
     QVERIFY(Upscaler::available());
 
     const QString source = work.filePath(QStringLiteral("scan.png"));
@@ -9281,6 +9285,7 @@ private slots:
     QVERIFY(!editor.hasGeneratedUpscale(source, TouchUp::None, 2));
     editor.saveTouchUp(source, TouchUp::None, 2, 4);
     QTRY_COMPARE(failed.count(), 1);
+    QVERIFY(failed.first().at(0).toString().contains(QString::fromLatin1(Upscaler::kPackage)));
   }
 
   // --- Quick image corrections ------------------------------------------

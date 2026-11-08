@@ -466,9 +466,11 @@ void CaptureModel::readPicture(const QString& path) {
     if (!plan.reduced) {
       // The version keeps the image cache from showing a picture that was
       // since saved over in place.
-      QUrl versioned = source;
-      versioned.setQuery(QStringLiteral("omaroll=") + version);
-      picture.insert(QStringLiteral("source"), versioned);
+      if (!version.isEmpty()) {
+        QUrl versioned = source;
+        versioned.setQuery(QStringLiteral("omaroll=") + version);
+        picture.insert(QStringLiteral("source"), versioned);
+      }
       return picture;
     }
     // Nothing to load when not even the reduced copy can be decoded.
