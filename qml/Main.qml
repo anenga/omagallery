@@ -58,6 +58,7 @@ ApplicationWindow {
     // grabs, so a scrim alone does not stop a tap on a sheet's control from
     // also reaching the tile, pill or viewer button under it.
     readonly property bool modalOpen: confirm.visible || permanentConfirm.visible || replaceConfirm.visible
+                                      || folderDeleteConfirm.visible
                                       || matteSheet.visible
                                       || correctionSheet.visible
                                       || touchUpSheet.visible
@@ -317,7 +318,9 @@ ApplicationWindow {
     }
 
     function dismissTopLayer() {
-        if (replaceConfirm.visible) {
+        if (folderDeleteConfirm.visible) {
+            folderDeleteConfirm.close()
+        } else if (replaceConfirm.visible) {
             replaceConfirm.close()
         } else if (confirm.visible) {
             confirm.close()
@@ -703,6 +706,33 @@ ApplicationWindow {
                                  + (targets.length === 1 ? targets[0].path : names.join("\n")
                                     + (targets.length > 3 ? "\nand " + (targets.length - 3) + " more selected files" : ""))
         permanentConfirm.open()
+    }
+
+    // A whole folder from the sidebar, permanently. Shows its name and what
+    // is in it, because nothing can bring it back.
+    function requestFolderDelete(path) {
+        const summary = Actions.folderDeleteSummary(path)
+        if (!summary.ok) {
+            root.say(summary.error)
+            return
+        }
+        if (!Settings.confirmFolderDelete) {
+            root.deleteFolder(path)
+            return
+        }
+        const plural = function (n, word) { return n + " " + word + (n === 1 ? "" : "s") }
+        const contents = summary.files === 0 && summary.folders === 0 ? "It is empty."
+            : "It holds " + (summary.more ? "more than " : "") + plural(summary.files, "file")
+              + (summary.folders > 0 ? " and " + plural(summary.folders, "folder") : "") + "."
+        folderDeleteConfirm.path = path
+        folderDeleteConfirm.title = "Permanently delete \u201c" + summary.name + "\u201d?"
+        folderDeleteConfirm.detail = contents + " This skips Trash and cannot be undone.\n\n" + path
+        folderDeleteConfirm.open()
+    }
+
+    function deleteFolder(path) {
+        root.say("Deleting " + path.substring(path.lastIndexOf("/") + 1) + "…")
+        Actions.deleteFolderPermanently(path)
     }
 
     function deletePermanently(paths) {
@@ -1120,6 +1150,7 @@ ApplicationWindow {
         onAddFolderRequested: libraryBrowser.addFolder()
         onGridFocusRequested: library.forceActiveFocus()
         onMessage: function(text) { root.say(text) }
+        onDeleteFolderRequested: function(path) { root.requestFolderDelete(path) }
         onVisibleChanged: if (!visible && activeFocus) library.forceActiveFocus()
     }
 
@@ -1806,6 +1837,21 @@ ApplicationWindow {
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
     }
 
+    ConfirmSheet {
+        id: folderDeleteConfirm
+        objectName: "folderDeleteConfirm"
+        property string path: ""
+        confirmLabel: "Delete permanently"
+        checkLabel: "Don't ask me again"
+        onAccepted: {
+            if (folderDeleteConfirm.checked) Settings.confirmFolderDelete = false
+            const path = folderDeleteConfirm.path
+            folderDeleteConfirm.path = ""
+            if (path !== "") root.deleteFolder(path)
+        }
+        onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
+    }
+
     // Save in place of the original, from the detail view or Touch up.
     ConfirmSheet {
         id: replaceConfirm
@@ -1849,6 +1895,13 @@ ApplicationWindow {
         }
         function onFailed(message) { root.say(message) }
         function onReported(message) { root.say(message) }
+        function onFolderDeleted(path, ok, message) {
+            root.say(message)
+            const filter = Captures.folderFilter
+            if (filter === path || filter.startsWith(path + "/")) Captures.folderFilter = ""
+            if (Settings.isFolderPinned(path)) Settings.unpinFolder(path)
+            Library.refresh()
+        }
         // A finished transcode lands next to its source, not at the top, so
         // show where it went: select it once the rescan brings it in.
         function onOutputSettled(path, saved) {

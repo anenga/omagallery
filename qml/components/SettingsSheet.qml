@@ -521,6 +521,39 @@ Item {
                 width: parent.width
                 spacing: 12
                 Column {
+                    width: parent.width - folderDeleteConfirmation.width - 12
+                    spacing: 2
+                    Text {
+                        text: "Confirm deleting folders"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        color: Theme.foreground
+                    }
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "Ask before Delete permanently removes a folder from the sidebar menu. Off deletes it at once, and it cannot be undone."
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.mutedText
+                    }
+                }
+                PillButton {
+                    id: folderDeleteConfirmation
+                    objectName: "folderDeleteConfirmation"
+                    accessibleName: "Confirm deleting folders"
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: Settings.confirmFolderDelete ? "On" : "Off"
+                    checkable: true
+                    active: Settings.confirmFolderDelete
+                    onClicked: Settings.confirmFolderDelete = !Settings.confirmFolderDelete
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 12
+                Column {
                     width: parent.width - replaceConfirmation.width - 12
                     spacing: 2
                     Text {

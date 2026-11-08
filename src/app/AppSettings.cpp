@@ -55,6 +55,7 @@ constexpr auto kSlideshowVideos = "slideshow/includeVideos";
 constexpr auto kConfirmPermanentDelete = "actions/confirmPermanentDelete";
 constexpr auto kConfirmReplace = "actions/confirmReplace";
 constexpr auto kConfirmTrash = "actions/confirmTrash";
+constexpr auto kConfirmFolderDelete = "actions/confirmFolderDelete";
 constexpr auto kSlideshowInterval = "slideshow/intervalSeconds";
 constexpr auto kSlideshowShuffle = "slideshow/shuffle";
 constexpr auto kEnlargeSmallPictures = "viewer/enlargeSmallPictures";
@@ -275,6 +276,7 @@ AppSettings::AppSettings(QObject* parent)
   m_confirmPermanentDelete = m_settings.value(kConfirmPermanentDelete, true).toBool();
   m_confirmReplace = m_settings.value(kConfirmReplace, true).toBool();
   m_confirmTrash = m_settings.value(kConfirmTrash, true).toBool();
+  m_confirmFolderDelete = m_settings.value(kConfirmFolderDelete, true).toBool();
   m_slideshowIntervalSeconds = qBound(2, m_settings.value(kSlideshowInterval, 4).toInt(), 20);
   m_slideshowShuffle = m_settings.value(kSlideshowShuffle, false).toBool();
   m_enlargeSmallPictures = m_settings.value(kEnlargeSmallPictures, true).toBool();
@@ -610,6 +612,13 @@ void AppSettings::setConfirmTrash(bool value) {
   m_confirmTrash = value;
   setValue(kConfirmTrash, value);
   emit confirmTrashChanged();
+}
+
+void AppSettings::setConfirmFolderDelete(bool value) {
+  if (m_confirmFolderDelete == value) return;
+  m_confirmFolderDelete = value;
+  setValue(kConfirmFolderDelete, value);
+  emit confirmFolderDeleteChanged();
 }
 
 void AppSettings::setSlideshowIntervalSeconds(int seconds) {

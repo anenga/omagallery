@@ -13,6 +13,8 @@ FocusScope {
     signal addFolderRequested()
     signal gridFocusRequested()
     signal message(string text)
+    // Delete permanently, from the folder menu; the window confirms it.
+    signal deleteFolderRequested(string path)
 
     function shade(base, amount) { return Qt.rgba(base.r, base.g, base.b, amount) }
     function basename(path) { return String(path).split("/").filter(Boolean).pop() || "/" }
@@ -353,15 +355,18 @@ FocusScope {
         delegate: MenuItem {
             id: menuItem
             implicitHeight: 36
+            readonly property bool destructive: menuItem.action !== null
+                                                && menuItem.action.objectName === "deleteFolderAction"
             contentItem: Text {
                 text: menuItem.text
-                color: Theme.foreground
+                color: menuItem.destructive ? Theme.red : Theme.foreground
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
-                color: menuItem.highlighted ? root.shade(Theme.accent, 0.2) : "transparent"
+                color: !menuItem.highlighted ? "transparent"
+                       : menuItem.destructive ? root.shade(Theme.red, 0.18) : root.shade(Theme.accent, 0.2)
             }
         }
         Action {
@@ -381,6 +386,17 @@ FocusScope {
         Action {
             text: "Open in file manager"
             onTriggered: Actions.open(folderMenu.path)
+        }
+        MenuSeparator {
+            contentItem: Rectangle {
+                implicitHeight: 1
+                color: root.shade(Theme.foreground, 0.14)
+            }
+        }
+        Action {
+            objectName: "deleteFolderAction"
+            text: "Delete permanently"
+            onTriggered: root.deleteFolderRequested(folderMenu.path)
         }
         onClosed: root.focusTree()
     }

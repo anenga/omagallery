@@ -59,6 +59,9 @@ class AppSettings final : public QObject {
   Q_PROPERTY(bool confirmReplace READ confirmReplace WRITE setConfirmReplace NOTIFY confirmReplaceChanged)
   // Ask before moving to Trash.
   Q_PROPERTY(bool confirmTrash READ confirmTrash WRITE setConfirmTrash NOTIFY confirmTrashChanged)
+  // Ask before a folder is deleted permanently from the sidebar.
+  Q_PROPERTY(bool confirmFolderDelete READ confirmFolderDelete WRITE setConfirmFolderDelete NOTIFY
+                 confirmFolderDeleteChanged)
   // Slideshow timing and order.
   Q_PROPERTY(int slideshowIntervalSeconds READ slideshowIntervalSeconds WRITE
                  setSlideshowIntervalSeconds NOTIFY slideshowIntervalSecondsChanged)
@@ -146,6 +149,8 @@ public:
   void setConfirmReplace(bool value);
   [[nodiscard]] bool confirmTrash() const { return m_confirmTrash; }
   void setConfirmTrash(bool value);
+  [[nodiscard]] bool confirmFolderDelete() const { return m_confirmFolderDelete; }
+  void setConfirmFolderDelete(bool value);
   [[nodiscard]] int slideshowIntervalSeconds() const { return m_slideshowIntervalSeconds; }
   void setSlideshowIntervalSeconds(int seconds);
   [[nodiscard]] bool slideshowShuffle() const { return m_slideshowShuffle; }
@@ -281,6 +286,7 @@ signals:
   void confirmPermanentDeleteChanged();
   void confirmReplaceChanged();
   void confirmTrashChanged();
+  void confirmFolderDeleteChanged();
   void slideshowIntervalSecondsChanged();
   void slideshowShuffleChanged();
   void viewerFilmstripChanged();
@@ -375,6 +381,7 @@ private:
   bool m_confirmPermanentDelete = true;
   bool m_confirmReplace = true;
   bool m_confirmTrash = true;
+  bool m_confirmFolderDelete = true;
   int m_slideshowIntervalSeconds = 4;
   bool m_slideshowShuffle = false;
   bool m_viewerFilmstrip = false;
