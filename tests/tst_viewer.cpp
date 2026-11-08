@@ -15,6 +15,7 @@
 #include "app/HeadlessAudio.h"
 #include "app/OpenRequest.h"
 #include "app/VideoPlayback.h"
+#include "edit/ImageEditor.h"
 #include "library/MediaInspector.h"
 #include "sources/FileVersion.h"
 #include "sources/ImageBudget.h"
@@ -157,6 +158,7 @@ private slots:
     m_session = new ViewerSession(this);
     m_mediaInfo = new MediaInspector(this);
     m_subtitles = new SubtitleIndex(this);
+    m_editor = new ImageEditor(this);
     // A bus of the test's own, so the player never reaches the desktop's.
     const QString daemon = QStandardPaths::findExecutable(QStringLiteral("dbus-daemon"));
     if (!daemon.isEmpty()) {
@@ -202,6 +204,7 @@ private slots:
     m_context->setContextProperty(QStringLiteral("Session"), m_session);
     m_context->setContextProperty(QStringLiteral("MediaInfo"), m_mediaInfo);
     m_context->setContextProperty(QStringLiteral("Subtitles"), m_subtitles);
+    m_context->setContextProperty(QStringLiteral("ViewerEdit"), m_editor);
 
     QQmlComponent component(m_engine);
     component.loadFromModule("Omaroll", "Viewer");
@@ -1162,6 +1165,32 @@ private slots:
     const QColor color = frame.pixelColor(frame.width() / 2, frame.height() / 2);
     QVERIFY2(color.red() < 10 && color.green() > 150 && color.blue() < 25,
              qPrintable(color.name()));
+  }
+
+  void aRotationCanBeSavedAsACopy() {
+    const QString folder = m_scratch.filePath(QStringLiteral("save-rotation"));
+    QVERIFY(QDir().mkpath(folder));
+    const QString source = folder + QStringLiteral("/a.jpg");
+    QVERIFY(QFile::copy(media(QStringLiteral("Shot 1.jpg")), source));
+    const QSize original = QImageReader(source).size();
+    // Not square, so a turn is visible in the copy's size.
+    QVERIFY(original.isValid() && original.width() != original.height());
+    open({source});
+    QTRY_VERIFY(prop("imageReady").toBool());
+    m_window->setProperty("chromePinned", true);
+    QTRY_VERIFY(item(QStringLiteral("viewerToolbar"))->isVisible());
+
+    QQuickItem* save = item(QStringLiteral("viewerSaveRotation"));
+    QVERIFY(!save->isVisible());
+    click(item(QStringLiteral("viewerRotateRight")));
+    QTRY_VERIFY(save->isVisible());
+    click(save);
+
+    const QString copy = folder + QStringLiteral("/a-edited.jpg");
+    QTRY_VERIFY(QFileInfo::exists(copy));
+    QTRY_COMPARE(QImageReader(copy).size(), original.transposed());
+    // The original is never touched.
+    QCOMPARE(QImageReader(source).size(), original);
   }
 
   void theToolbarHasTheCommonPictureControls() {
@@ -3796,6 +3825,7 @@ private:
   ViewerSession* m_session = nullptr;
   MediaInspector* m_mediaInfo = nullptr;
   SubtitleIndex* m_subtitles = nullptr;
+  ImageEditor* m_editor = nullptr;
   ThumbnailProvider* m_thumbnails = nullptr;
   RawImageProvider* m_raws = nullptr;
   LargeImageProvider* m_large = nullptr;
