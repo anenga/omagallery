@@ -45,6 +45,7 @@ constexpr auto kVideoPrimaryAction = "actions/videoPrimary";
 constexpr auto kThumbnailCacheMb = "cache/maximumMb";
 constexpr auto kTileWidth = "view/tileWidth";
 constexpr auto kShowGridFilenames = "view/showGridFilenames";
+constexpr auto kGalleryView = "view/gallery";
 constexpr auto kShowFolderSidebar = "view/showFolderSidebar";
 constexpr auto kFolderSidebarWidth = "view/folderSidebarWidth";
 constexpr auto kPreviewWidth = "view/previewWidth";
@@ -265,6 +266,7 @@ AppSettings::AppSettings(QObject* parent)
   m_tileWidth =
       qBound(kMinimumTileWidth, m_settings.value(kTileWidth, 240).toInt(), kMaximumTileWidth);
   m_showGridFilenames = m_settings.value(kShowGridFilenames, false).toBool();
+  m_galleryView = m_settings.value(kGalleryView, false).toBool();
   m_showFolderSidebar = m_settings.value(kShowFolderSidebar, false).toBool();
   m_folderSidebarWidth = qBound(180, m_settings.value(kFolderSidebarWidth, 240).toInt(), 400);
   m_previewWidth = qBound(500, m_settings.value(kPreviewWidth, 1000).toInt(), 8192);
@@ -531,6 +533,15 @@ void AppSettings::setShowGridFilenames(bool value) {
   m_showGridFilenames = value;
   m_settings.setValue(kShowGridFilenames, value);
   emit showGridFilenamesChanged();
+}
+
+void AppSettings::setGalleryView(bool value) {
+  if (m_galleryView == value) {
+    return;
+  }
+  m_galleryView = value;
+  setValue(kGalleryView, value);
+  emit galleryViewChanged();
 }
 
 void AppSettings::setShowFolderSidebar(bool value) {

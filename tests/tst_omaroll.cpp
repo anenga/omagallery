@@ -14,6 +14,8 @@
 #include <QJsonObject>
 #include "library/CaptureFilterModel.h"
 #include "library/FolderTreeModel.h"
+#include "library/AspectIndex.h"
+#include "library/GalleryLayout.h"
 #include <QAbstractItemModelTester>
 #include "library/CaptureModel.h"
 #include "library/CaptureRoles.h"
@@ -230,6 +232,66 @@ class OmarollTest : public QObject {
   Q_OBJECT
 
 private slots:
+  void galleryRowsFillTheWidth() {
+    // Four 3:2 pictures and a portrait at 1000px wide, 200px target.
+    const QList<double> ratios = {1.5, 1.5, 1.5, 0.75, 1.5, 1.5};
+    const QList<GalleryLayout::Row> rows = GalleryLayout::pack(ratios, {}, 1000, 200, 4);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).start, 0);
+    QCOMPARE(rows.at(0).count, 4);
+    QVERIFY(rows.at(0).justified);
+    // The justified row's pictures and gaps add up to the full width.
+    double used = 4 * 3;
+    for (double ratio : rows.at(0).ratios) used += ratio * rows.at(0).height;
+    QVERIFY(qAbs(used - 1000) < 0.01);
+    QVERIFY(rows.at(0).height <= 200);
+    // The last row keeps the target height instead of blowing up.
+    QCOMPARE(rows.at(1).start, 4);
+    QCOMPARE(rows.at(1).count, 2);
+    QVERIFY(!rows.at(1).justified);
+    QCOMPARE(rows.at(1).height, 200.0);
+  }
+
+  void galleryRowsBreakAtEachGroup() {
+    const QList<double> ratios = {1.5, 1.5, 1.5, 1.5, 1.5};
+    const QStringList labels = {QStringLiteral("Today"), QStringLiteral("Today"),
+                                QStringLiteral("Yesterday"), QStringLiteral("Yesterday"),
+                                QStringLiteral("Yesterday")};
+    const QList<GalleryLayout::Row> rows = GalleryLayout::pack(ratios, labels, 5000, 200, 4);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).label, QStringLiteral("Today"));
+    QCOMPARE(rows.at(0).count, 2);
+    QCOMPARE(rows.at(1).label, QStringLiteral("Yesterday"));
+    QCOMPARE(rows.at(1).start, 2);
+    QCOMPARE(rows.at(1).count, 3);
+    // Extreme shapes are clamped so no picture takes a row alone or vanishes.
+    const QList<GalleryLayout::Row> wide = GalleryLayout::pack({20.0, 0.05}, {}, 1000, 200, 4);
+    QCOMPARE(wide.first().ratios.first(), GalleryLayout::kMaximumRatio);
+    QCOMPARE(wide.first().ratios.last(), GalleryLayout::kMinimumRatio);
+    QVERIFY(GalleryLayout::pack({}, {}, 1000, 200, 4).isEmpty());
+    QVERIFY(GalleryLayout::pack({1.5}, {}, 0, 200, 4).isEmpty());
+  }
+
+  void aspectIndexReadsPictureShapes() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString tall = dir.filePath(QStringLiteral("tall.png"));
+    QImage image(200, 400, QImage::Format_RGB32);
+    image.fill(Qt::gray);
+    QVERIFY(image.save(tall));
+    QCOMPARE(AspectIndex::readRatio(tall), 0.5);
+    QCOMPARE(AspectIndex::readRatio(dir.filePath(QStringLiteral("missing.png"))), 0.0);
+
+    AspectIndex index;
+    QCOMPARE(index.ratio(tall, 1, true, false), AspectIndex::kVideoRatio);
+    QCOMPARE(index.ratio(tall, 1, false, true), AspectIndex::kDocumentRatio);
+    // Unknown until read in the background, then the real shape.
+    QCOMPARE(index.ratio(tall, 1, false, false), AspectIndex::kPhotoRatio);
+    QSignalSpy changed(&index, &AspectIndex::ratiosChanged);
+    QVERIFY(changed.wait(5000));
+    QCOMPARE(index.ratio(tall, 1, false, false), 0.5);
+  }
+
   void playbackEnvironment_data() {
     QTest::addColumn<bool>("decodeSet");
     QTest::addColumn<QString>("decode");
@@ -1493,6 +1555,8 @@ private slots:
     settings.setThumbnailCacheMb(512);
     settings.setTileWidth(320);
     settings.setSlideshowVideos(true);
+    QVERIFY(!settings.galleryView());
+    settings.setGalleryView(true);
 
     const QString unavailable = dir.path();
     QVERIFY(QDir(unavailable).removeRecursively());
@@ -1502,6 +1566,8 @@ private slots:
     QCOMPARE(restored.videoPrimaryAction(), QStringLiteral("play"));
     QCOMPARE(restored.thumbnailCacheMb(), 512);
     QCOMPARE(restored.tileWidth(), 320);
+    QVERIFY(restored.galleryView());
+    restored.setGalleryView(false);
     restored.setTileWidth(10);
     QCOMPARE(restored.tileWidth(), 160);
     restored.setTileWidth(5000);

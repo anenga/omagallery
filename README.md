@@ -174,6 +174,10 @@ until the viewer closes; subtitle delay resets when the file changes.
 - **Browse your media.** See files by day, source or folder; filter by kind,
   date, camera or lens, and resize the grid. Original photo and video dates are
   used when available. Add folders without importing or copying their files.
+- **Switch to a photo gallery.** Press `G` or the Gallery button to lay the
+  library out in justified rows that keep every picture's own shape, with a
+  header over each day. Time and size appear on hover. Press `G` again for the
+  card grid.
 - **Organize without changing originals.** Albums, nested tags, captions,
   favourites, ratings and saved searches live in Omaroll's settings. Undo marks
   with Ctrl+Z, and back up or restore your organization from Settings.
@@ -348,6 +352,7 @@ and put on your clipboard.
 | `Ctrl+C` with words picked | Copy them |
 | `X` · `Ctrl+A` | Select · Select all |
 | with a selection | `V` `Ctrl+H` `Y` `S` `Del` act on every checked file |
+| `G` | Switch between the card grid and the photo gallery |
 | `Ctrl` + wheel · `Ctrl` `+` `-` `0` | Bigger or smaller tiles · reset |
 | drag | Drop the file, or the whole selection, into another app |
 | `Del` | Move to Trash, with confirm |

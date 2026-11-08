@@ -10,6 +10,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+class AspectIndex;
+
 struct CaptureRecord;
 
 // Sorting, kind filtering and search over the library.
@@ -177,6 +179,15 @@ public:
   // cache can deliver many entries in one event-loop turn.
   void setOcrText(const QString& path, const QString& text);
 
+  // The gallery view. Rows are packed from each item's shape; with grouped
+  // set, each day (or match set) starts its own row and carries a label.
+  // Each row is {start, count, height, label, ratios}.
+  void setAspectIndex(AspectIndex* aspects) { m_aspects = aspects; }
+  Q_INVOKABLE QVariantList galleryRows(double width, double targetHeight, double spacing,
+                                       bool grouped);
+  // Every role of one row, for gallery tiles that are not view delegates.
+  Q_INVOKABLE QVariantMap rowData(int row) const;
+
   // The proxy row showing this path, or -1 when it is filtered out or unknown.
   Q_INVOKABLE int rowOf(const QString& path) const;
 
@@ -221,6 +232,7 @@ protected:
   [[nodiscard]] bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
 
 private:
+  AspectIndex* m_aspects = nullptr;
   void beginFilterUpdate();
   void endFilterUpdate();
   void rebuildPairing();

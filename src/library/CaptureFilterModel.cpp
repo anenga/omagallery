@@ -1,5 +1,7 @@
 #include "library/CaptureFilterModel.h"
 
+#include "library/AspectIndex.h"
+#include "library/GalleryLayout.h"
 #include "library/CaptureModel.h"
 #include "library/CaptureRoles.h"
 
@@ -884,6 +886,62 @@ qint64 CaptureFilterModel::stampAt(int row) const {
 
 QString CaptureFilterModel::ocrSnippetAt(int row) const {
   return data(index(row, 0), CaptureRoles::OcrSnippetRole).toString();
+}
+
+QVariantList CaptureFilterModel::galleryRows(double width, double targetHeight, double spacing,
+                                             bool grouped) {
+  const int rows = rowCount();
+  QList<double> ratios;
+  ratios.reserve(rows);
+  QStringList labels;
+  if (grouped) {
+    labels.reserve(rows);
+  }
+  for (int row = 0; row < rows; ++row) {
+    const QModelIndex at = index(row, 0);
+    const bool video = at.data(CaptureRoles::IsVideoRole).toBool();
+    const bool document = at.data(CaptureRoles::IsDocumentRole).toBool();
+    ratios.append(m_aspects ? m_aspects->ratio(at.data(CaptureRoles::PathRole).toString(),
+                                               at.data(CaptureRoles::StampRole).toLongLong(),
+                                               video, document)
+                            : (video ? AspectIndex::kVideoRatio
+                                     : document ? AspectIndex::kDocumentRatio
+                                                : AspectIndex::kPhotoRatio));
+    if (grouped) {
+      labels.append(gridLabelAt(row));
+    }
+  }
+  QVariantList out;
+  const QList<GalleryLayout::Row> packed =
+      GalleryLayout::pack(ratios, labels, width, targetHeight, spacing);
+  out.reserve(packed.size());
+  for (const GalleryLayout::Row& row : packed) {
+    QVariantList rowRatios;
+    rowRatios.reserve(row.ratios.size());
+    for (double ratio : row.ratios) {
+      rowRatios.append(ratio);
+    }
+    out.append(QVariantMap{{QStringLiteral("start"), row.start},
+                           {QStringLiteral("count"), row.count},
+                           {QStringLiteral("height"), row.height},
+                           {QStringLiteral("label"), row.label},
+                           {QStringLiteral("justified"), row.justified},
+                           {QStringLiteral("ratios"), rowRatios}});
+  }
+  return out;
+}
+
+QVariantMap CaptureFilterModel::rowData(int row) const {
+  QVariantMap out;
+  if (row < 0 || row >= rowCount()) {
+    return out;
+  }
+  const QModelIndex at = index(row, 0);
+  const QHash<int, QByteArray> roles = roleNames();
+  for (auto it = roles.constBegin(); it != roles.constEnd(); ++it) {
+    out.insert(QString::fromLatin1(it.value()), at.data(it.key()));
+  }
+  return out;
 }
 
 QVariant CaptureFilterModel::data(const QModelIndex& proxyIndex, int role) const {

@@ -38,6 +38,10 @@ add_library(omaroll_core STATIC
   src/library/SimilarityIndex.h
   src/library/MediaMetadataIndex.cpp
   src/library/MediaMetadataIndex.h
+  src/library/AspectIndex.cpp
+  src/library/AspectIndex.h
+  src/library/GalleryLayout.cpp
+  src/library/GalleryLayout.h
   src/sources/CameraRaw.cpp
   src/sources/CameraRaw.h
   src/sources/RawJpegPairs.cpp
@@ -157,6 +161,7 @@ set(OMAROLL_QML_FILES
   qml/components/ActionMenu.qml
   qml/components/CaptureCard.qml
   qml/components/CaptureGrid.qml
+  qml/components/JustifiedGallery.qml
   qml/components/DayHeader.qml
   qml/components/Chrome.qml
   qml/components/FilterBar.qml

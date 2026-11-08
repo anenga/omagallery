@@ -10,8 +10,15 @@ FocusScope {
     id: root
 
     property var model: null
-    property alias currentIndex: grid.currentIndex
-    property alias count: grid.count
+    // Cards is the uniform grid below; gallery is JustifiedGallery, rows that
+    // keep each picture's shape. Both share the selection and current tile
+    // held here, so Main never needs to know which one is showing.
+    readonly property bool gallery: Settings.galleryView
+    property int currentIndex: -1
+    readonly property int count: gallery ? (model ? model.count : 0) : grid.count
+    // The current path in gallery mode, carried across to the card grid.
+    property string galleryPath: ""
+    readonly property Flickable flick: gallery ? galleryView : grid
     property string currentDayLabel: ""
     property bool layoutReady: true
 
@@ -35,9 +42,79 @@ FocusScope {
     // shortcuts match, the press counts as ambiguous, and neither fires.
     signal sectionStepRequested(int step)
 
+    onCurrentIndexChanged: {
+        if (gallery) {
+            if (!restoringLayout) {
+                selectedPath = currentIndex >= 0 ? Captures.pathAt(currentIndex) : ""
+                galleryPath = selectedPath
+            }
+        } else if (grid.currentIndex !== currentIndex) {
+            grid.currentIndex = currentIndex
+        }
+    }
+
+    // Switching keeps the same picture current and on screen. The gallery
+    // shares this index, so going there needs only a scroll; the card grid
+    // gets its model back first and is pointed at the picture after.
+    onGalleryChanged: {
+        if (gallery) {
+            galleryPath = selectedPath
+            Qt.callLater(function () {
+                if (!root.gallery) return
+                galleryView.rebuild()
+                if (root.currentIndex >= 0) galleryView.revealItem(root.currentIndex)
+            })
+            return
+        }
+        const keep = galleryPath
+        restoringLayout = true
+        Qt.callLater(function () {
+            if (root.gallery) return
+            const row = Captures.rowOf(keep)
+            const wanted = row >= 0 ? row : (root.count > 0 ? 0 : -1)
+            root.selectedPath = wanted >= 0 ? Captures.pathAt(wanted) : ""
+            grid.currentIndex = wanted
+            if (wanted >= 0) grid.positionViewAtIndex(wanted, GridView.Contain)
+            root.currentIndex = wanted
+            root.restoringLayout = false
+            root.updateDay()
+        })
+    }
+
+    // Shared by both views' tiles.
+    function activatePath(path) {
+        Captures.commitPendingSearch()
+        const row = Captures.rowOf(path)
+        if (row < 0) return
+        root.selectedPath = path
+        root.currentIndex = row
+        root.forceActiveFocus()
+    }
+    function choosePath(path) {
+        Captures.commitPendingSearch()
+        const row = Captures.rowOf(path)
+        if (row < 0) return
+        root.selectedPath = path
+        root.currentIndex = row
+        root.detailRequested(row)
+    }
+    function contextPath(path, x, y) {
+        Captures.commitPendingSearch()
+        const row = Captures.rowOf(path)
+        if (row < 0) return
+        root.selectedPath = path
+        root.currentIndex = row
+        root.contextRequested(row, x, y)
+    }
+    function togglePath(path) {
+        Captures.commitPendingSearch()
+        if (Captures.rowOf(path) >= 0) root.toggleChecked(path)
+    }
+
     // Include every intersecting cell, including the partial bottom row.
     // Cached offscreen delegates do not count, nor does an empty library.
     function viewportReady() {
+        if (gallery) return visible && layoutReady && galleryView.viewportReady()
         if (!visible || !layoutReady || grid.count === 0 || grid.width <= 0 || grid.height <= 0)
             return false
         const firstRow = Math.max(0, Math.floor((grid.contentY - grid.originY) / grid.cellHeight))
@@ -79,7 +156,7 @@ FocusScope {
 
     function checkAll() {
         const next = {}
-        for (let i = 0; i < grid.count; i++) {
+        for (let i = 0; i < root.count; i++) {
             next[Captures.pathAt(i)] = true
         }
         checkedSet = next
@@ -90,6 +167,7 @@ FocusScope {
 
     function rememberLayout() {
         restoringLayout = true
+        if (gallery) return
         const anchor = grid.indexAt(grid.contentX + 4, grid.contentY + 4)
         layoutAnchorPath = anchor >= 0 ? Captures.pathAt(anchor) : ""
         layoutAnchorOffset = anchor >= 0
@@ -98,6 +176,21 @@ FocusScope {
     }
 
     function restoreLayout() {
+        if (gallery) {
+            const row = Captures.rowOf(selectedPath)
+            restoringLayout = false
+            if (row >= 0) {
+                currentIndex = row
+            } else if (root.count > 0) {
+                currentIndex = Math.max(0, Math.min(currentIndex, root.count - 1))
+                selectedPath = Captures.pathAt(currentIndex)
+                galleryPath = selectedPath
+            } else {
+                currentIndex = -1
+                selectedPath = ""
+            }
+            return
+        }
         if (!grid.reuseItems) {
             restoringLayout = false
             return
@@ -114,6 +207,7 @@ FocusScope {
             selectedPath = ""
         }
         restoringLayout = false
+        root.currentIndex = grid.currentIndex
         Qt.callLater(root.restoreLayoutAnchor)
     }
 
@@ -195,6 +289,14 @@ FocusScope {
     }
 
     function updateDay() {
+        if (gallery) {
+            const rowIndex = galleryView.indexAt(4, galleryView.contentY + 4)
+            const rows = galleryView.rows
+            const first = rowIndex >= 0 && rowIndex < rows.length ? rows[rowIndex].start
+                          : (root.count > 0 ? 0 : -1)
+            root.currentDayLabel = first >= 0 ? Captures.gridLabelAt(first) : ""
+            return
+        }
         const index = grid.indexAt(grid.contentX + 4, grid.contentY + 4)
         if (index >= 0) {
             root.currentDayLabel = Captures.gridLabelAt(index)
@@ -208,6 +310,101 @@ FocusScope {
         }
     }
 
+    // Arrows are handled by GridView itself in the card grid and here in the
+    // gallery; this adds the vim keys and the ones that act on the selection.
+    // Single-letter action keys live in Main so they work whether or not the
+    // library has focus.
+    function handleKey(event) {
+        const g = root.gallery
+        const current = root.currentIndex
+        Captures.commitPendingSearch()
+        switch (event.key) {
+        case Qt.Key_Return:
+        case Qt.Key_Enter:
+            if (current >= 0) {
+                root.detailRequested(current)
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Space:
+            if (current >= 0) {
+                root.chosen(current)
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Delete:
+            // Shift+Delete belongs to the non-repeating permanent-delete
+            // shortcut. A repeat rejected there must not turn into Trash.
+            if (event.modifiers & Qt.ShiftModifier) {
+                event.accepted = true
+                break
+            }
+            if (current >= 0) {
+                root.deleteRequested(Captures.pathAt(current))
+                event.accepted = true
+            }
+            break
+        case Qt.Key_X:
+            if (current >= 0) {
+                root.toggleChecked(Captures.pathAt(current))
+                event.accepted = true
+            }
+            break
+        case Qt.Key_Left:
+            if (g) { galleryView.stepItem(-1); event.accepted = true }
+            break
+        case Qt.Key_Right:
+            if (g) { galleryView.stepItem(1); event.accepted = true }
+            break
+        case Qt.Key_Up:
+            if (g) { galleryView.stepRow(-1); event.accepted = true }
+            break
+        case Qt.Key_Down:
+            if (g) { galleryView.stepRow(1); event.accepted = true }
+            break
+        case Qt.Key_H:
+            if (g) galleryView.stepItem(-1)
+            else grid.moveCurrentIndexLeft()
+            event.accepted = true
+            break
+        case Qt.Key_J:
+            if (g) galleryView.stepRow(1)
+            else grid.moveCurrentIndexDown()
+            event.accepted = true
+            break
+        case Qt.Key_K:
+            if (g) galleryView.stepRow(-1)
+            else grid.moveCurrentIndexUp()
+            event.accepted = true
+            break
+        case Qt.Key_L:
+            if (g) galleryView.stepItem(1)
+            else grid.moveCurrentIndexRight()
+            event.accepted = true
+            break
+        case Qt.Key_Tab:
+            root.sectionStepRequested(event.modifiers & Qt.ShiftModifier ? -1 : 1)
+            event.accepted = true
+            break
+        case Qt.Key_Backtab:
+            root.sectionStepRequested(-1)
+            event.accepted = true
+            break
+        case Qt.Key_Home:
+            root.currentIndex = 0
+            if (g) galleryView.positionViewAtBeginning()
+            else grid.positionViewAtBeginning()
+            event.accepted = true
+            break
+        case Qt.Key_End:
+            root.currentIndex = root.count - 1
+            if (g) galleryView.positionViewAtEnd()
+            else grid.positionViewAtEnd()
+            event.accepted = true
+            break
+        }
+    }
+
     GridView {
         id: grid
         // Left from the first tile lands on the last and Right from the last
@@ -215,10 +412,11 @@ FocusScope {
         keyNavigationWraps: true
         anchors.fill: parent
         anchors.rightMargin: root.scrollbarWidth
-        focus: true
+        focus: !root.gallery
+        visible: !root.gallery
         clip: true
 
-        model: root.layoutReady ? root.model : null
+        model: root.layoutReady && !root.gallery ? root.model : null
         reuseItems: true
 
         cellWidth: root.cellWidth
@@ -266,8 +464,12 @@ FocusScope {
             Qt.callLater(root.updateDay)
         }
         onCurrentIndexChanged: {
+            if (root.gallery) {
+                return
+            }
             if (!root.restoringLayout && grid.reuseItems) {
                 root.selectedPath = currentIndex >= 0 ? Captures.pathAt(currentIndex) : ""
+                root.currentIndex = currentIndex
             }
         }
         Connections {
@@ -328,114 +530,25 @@ FocusScope {
                 // Dragging a checked tile takes the whole selection with it.
                 dragPaths: root.isChecked(cell.path) ? root.checkedPaths() : [cell.path]
 
-                onActivated: {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    const row = Captures.rowOf(path)
-                    if (row < 0) return
-                    root.selectedPath = path
-                    grid.currentIndex = row
-                    grid.forceActiveFocus()
-                }
-                onChosen: {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    const row = Captures.rowOf(path)
-                    if (row < 0) return
-                    root.selectedPath = path
-                    grid.currentIndex = row
-                    root.detailRequested(row)
-                }
-                onContextRequested: function(x, y) {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    const row = Captures.rowOf(path)
-                    if (row < 0) return
-                    root.selectedPath = path
-                    grid.currentIndex = row
-                    root.contextRequested(row, x, y)
-                }
-                onToggleChecked: {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    if (Captures.rowOf(path) >= 0) root.toggleChecked(path)
-                }
+                onActivated: root.activatePath(cell.path)
+                onChosen: root.choosePath(cell.path)
+                onContextRequested: function(x, y) { root.contextPath(cell.path, x, y) }
+                onToggleChecked: root.togglePath(cell.path)
             }
         }
 
-        // Arrows are handled by GridView itself; this adds the vim keys and the
-        // ones that act on the selection. Single-letter action keys live in
-        // Main so they work whether or not the grid has focus.
-        Keys.onPressed: function (event) {
-            Captures.commitPendingSearch()
-            switch (event.key) {
-            case Qt.Key_Return:
-            case Qt.Key_Enter:
-                if (grid.currentIndex >= 0) {
-                    root.detailRequested(grid.currentIndex)
-                    event.accepted = true
-                }
-                break
-            case Qt.Key_Space:
-                if (grid.currentIndex >= 0) {
-                    root.chosen(grid.currentIndex)
-                    event.accepted = true
-                }
-                break
-            case Qt.Key_Delete:
-                // Shift+Delete belongs to the non-repeating permanent-delete
-                // shortcut. A repeat rejected there must not turn into Trash.
-                if (event.modifiers & Qt.ShiftModifier) {
-                    event.accepted = true
-                    break
-                }
-                if (grid.currentIndex >= 0) {
-                    root.deleteRequested(Captures.pathAt(grid.currentIndex))
-                    event.accepted = true
-                }
-                break
-            case Qt.Key_X:
-                if (grid.currentIndex >= 0) {
-                    root.toggleChecked(Captures.pathAt(grid.currentIndex))
-                    event.accepted = true
-                }
-                break
-            case Qt.Key_H:
-                grid.moveCurrentIndexLeft()
-                event.accepted = true
-                break
-            case Qt.Key_J:
-                grid.moveCurrentIndexDown()
-                event.accepted = true
-                break
-            case Qt.Key_K:
-                grid.moveCurrentIndexUp()
-                event.accepted = true
-                break
-            case Qt.Key_L:
-                grid.moveCurrentIndexRight()
-                event.accepted = true
-                break
-            case Qt.Key_Tab:
-                root.sectionStepRequested(event.modifiers & Qt.ShiftModifier ? -1 : 1)
-                event.accepted = true
-                break
-            case Qt.Key_Backtab:
-                root.sectionStepRequested(-1)
-                event.accepted = true
-                break
-            case Qt.Key_Home:
-                grid.currentIndex = 0
-                grid.positionViewAtBeginning()
-                event.accepted = true
-                break
-            case Qt.Key_End:
-                grid.currentIndex = grid.count - 1
-                grid.positionViewAtEnd()
-                event.accepted = true
-                break
-            }
-        }
+        Keys.onPressed: function (event) { root.handleKey(event) }
+    }
+
+    JustifiedGallery {
+        id: galleryView
+        objectName: "gallery"
+        owner: root
+        anchors.fill: parent
+        anchors.rightMargin: root.scrollbarWidth
+        visible: root.gallery
+        focus: root.gallery
+        Keys.onPressed: function (event) { root.handleKey(event) }
     }
 
     // Standalone rather than GridView's attached ScrollBar. The attached one is
@@ -445,18 +558,18 @@ FocusScope {
     ScrollBar {
         id: scrollbar
         orientation: Qt.Vertical
-        policy: grid.contentHeight > grid.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+        policy: root.flick.contentHeight > root.flick.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
 
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         width: root.scrollbarWidth
 
-        size: grid.height / Math.max(grid.contentHeight, 1)
-        position: grid.visibleArea.yPosition
+        size: root.flick.height / Math.max(root.flick.contentHeight, 1)
+        position: root.flick.visibleArea.yPosition
         onPositionChanged: {
             if (pressed) {
-                grid.contentY = position * grid.contentHeight
+                root.flick.contentY = position * root.flick.contentHeight
             }
         }
 

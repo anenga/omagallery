@@ -14,6 +14,7 @@
 #include "library/CaptureModel.h"
 #include "library/DuplicateIndex.h"
 #include "library/MediaMetadataIndex.h"
+#include "library/AspectIndex.h"
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
 #include "edit/EditProvider.h"
@@ -170,7 +171,7 @@ Options:
                          your own files. Nothing personal appears on screen.
   --render <file.png>    Render the window to a PNG and exit. Draws offscreen,
                          so no compositor can resize it or overlap it.
-  --render-view <view>   Which view to render: grid, detail, video, slideshow,
+  --render-view <view>   Which view to render: grid, gallery, detail, video, slideshow,
                          matte, corrections, compare, export, rename, OCR,
                          editors, pins, context-menu, selection-menu,
                          duplicates, browser, sidebar, settings, viewer, viewer-video,
@@ -218,6 +219,7 @@ public:
     // QML only ever sees the proxy, so sorting and filtering can change
     // without any delegate knowing.
     m_library.setSourceModel(&m_captures);
+    m_library.setAspectIndex(&m_aspects);
     QObject::connect(&m_library, &CaptureFilterModel::searchTextChanged, &m_textIndex,
                      [this] { m_textIndex.setSearchText(m_library.searchText()); });
     QObject::connect(&m_textIndex, &OcrIndex::textReady, &m_library,
@@ -271,6 +273,7 @@ public:
     m_context.setContextProperty(QStringLiteral("MediaInfo"), &m_mediaInfo);
     m_context.setContextProperty(QStringLiteral("PdfInfo"), &m_pdfInfo);
     m_context.setContextProperty(QStringLiteral("MediaMetadata"), &m_mediaMetadata);
+    m_context.setContextProperty(QStringLiteral("Aspects"), &m_aspects);
     m_context.setContextProperty(QStringLiteral("Tailscale"), &m_tailscale);
     m_context.setContextProperty(QStringLiteral("InitialPaths"), request.files);
     m_context.setContextProperty(QStringLiteral("InitialFolderPath"), request.folder);
@@ -280,6 +283,7 @@ public:
   void requestStop() {
     m_captures.requestStop();
     m_mediaMetadata.requestStop();
+    m_aspects.requestStop();
     m_textIndex.requestStop();
     m_duplicates.requestStop();
     m_similarities.requestStop();
@@ -322,6 +326,7 @@ private:
 
   CaptureModel m_captures;
   MediaMetadataIndex m_mediaMetadata;
+  AspectIndex m_aspects;
   CaptureFilterModel m_library;
   FolderTreeModel m_folderTree;
   OcrIndex m_textIndex;
@@ -443,7 +448,7 @@ int main(int argc, char* argv[]) {
   }
   const QString renderView = optionValue(arguments, QStringLiteral("--render-view"));
   static const QStringList renderViews = {
-      QStringLiteral("grid"),       QStringLiteral("grid-filenames"),
+      QStringLiteral("grid"),       QStringLiteral("grid-filenames"), QStringLiteral("gallery"),
       QStringLiteral("detail"),     QStringLiteral("document"),
       QStringLiteral("video"),
       QStringLiteral("slideshow"),  QStringLiteral("matte"),   QStringLiteral("corrections"),

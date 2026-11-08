@@ -22,6 +22,7 @@
 #include "library/CaptureModel.h"
 #include "library/DuplicateIndex.h"
 #include "library/MediaMetadataIndex.h"
+#include "library/AspectIndex.h"
 #include "library/CaptureRoles.h"
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
@@ -255,6 +256,8 @@ private slots:
     m_mediaInfo = new MediaInspector(this);
     m_pdfInfo = new PdfInspector(this);
     m_mediaMetadata = new MediaMetadataIndex(nullptr, this);
+    m_aspects = new AspectIndex(this);
+    m_library->setAspectIndex(m_aspects);
     m_actions = new ActionLauncher(this);
     m_registry = new ActionRegistry(m_actions, this);
     m_tailscale = new TailscalePeers(this);
@@ -326,6 +329,7 @@ private slots:
     context->setContextProperty(QStringLiteral("MediaInfo"), m_mediaInfo);
     context->setContextProperty(QStringLiteral("PdfInfo"), m_pdfInfo);
     context->setContextProperty(QStringLiteral("MediaMetadata"), m_mediaMetadata);
+    context->setContextProperty(QStringLiteral("Aspects"), m_aspects);
     context->setContextProperty(QStringLiteral("Tailscale"), m_tailscale);
     context->setContextProperty(QStringLiteral("DemoMode"), true);
     // Without a bus connection, so playback never reaches the desktop's.
@@ -1526,6 +1530,7 @@ private slots:
     context->setContextProperty(QStringLiteral("Captures"), &thumbnailCaptures);
     context->setContextProperty(QStringLiteral("Library"), m_captures);
     context->setContextProperty(QStringLiteral("MediaMetadata"), m_mediaMetadata);
+    context->setContextProperty(QStringLiteral("Aspects"), m_aspects);
     QStringList warnings;
     connect(&engine, &QQmlEngine::warnings, &engine, [&warnings](const QList<QQmlError>& errors) {
       for (const auto& error : errors) warnings.append(error.toString());
@@ -5507,6 +5512,55 @@ private slots:
   // A small tiled window with large tiles cuts the visible rows off at the
   // bottom. Double-clicking a partly visible tile must open that tile, not
   // whatever the view scrolled under the pointer after the first click.
+  void galleryViewKeepsTheCurrentPictureAndJustifiesRows() {
+    QQuickItem* grid = item("library");
+    QQuickItem* gallery = item("gallery");
+    QVERIFY(grid);
+    QVERIFY(gallery);
+    const auto restore = qScopeGuard([&] {
+      m_settings->setGalleryView(false);
+      QTest::qWait(300);
+    });
+    QVERIFY(m_library->rowCount() > 4);
+    grid->setProperty("currentIndex", 3);
+    const QString current = pathAt(3);
+
+    m_settings->setGalleryView(true);
+    QTRY_VERIFY_WITH_TIMEOUT(gallery->isVisible() &&
+                                 gallery->property("rows").toList().size() > 0,
+                             5000);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
+    QCOMPARE(grid->property("count").toInt(), m_library->rowCount());
+    // Every justified row meets the right edge; rows cover every picture once.
+    const QVariantList rows = gallery->property("rows").toList();
+    int covered = 0;
+    for (const QVariant& value : rows) {
+      const QVariantMap row = value.toMap();
+      QCOMPARE(row.value(QStringLiteral("start")).toInt(), covered);
+      covered += row.value(QStringLiteral("count")).toInt();
+      if (!row.value(QStringLiteral("justified")).toBool()) continue;
+      double used = 4.0 * (row.value(QStringLiteral("count")).toInt() - 1);
+      for (const QVariant& ratio : row.value(QStringLiteral("ratios")).toList())
+        used += ratio.toDouble() * row.value(QStringLiteral("height")).toDouble();
+      QVERIFY(qAbs(used - gallery->width()) < 1.0);
+    }
+    QCOMPARE(covered, m_library->rowCount());
+
+    // Right steps to the next picture, as in the card grid.
+    gallery->forceActiveFocus();
+    QTest::keyClick(m_window, Qt::Key_Right);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 4, 2000);
+    QTest::keyClick(m_window, Qt::Key_Left);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
+
+    // G switches back, still on the same picture.
+    QTest::keyClick(m_window, Qt::Key_G);
+    QTRY_VERIFY_WITH_TIMEOUT(!m_settings->galleryView(), 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(!gallery->isVisible(), 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
+    QCOMPARE(grid->property("selectedPath").toString(), current);
+  }
+
   void doubleClickOnAPartlyVisibleTileOpensThatTile() {
     QQuickItem* grid = item("library");
     QQuickItem* detail = item("detail");
@@ -5880,6 +5934,7 @@ private:
   MediaInspector* m_mediaInfo = nullptr;
   PdfInspector* m_pdfInfo = nullptr;
   MediaMetadataIndex* m_mediaMetadata = nullptr;
+  AspectIndex* m_aspects = nullptr;
   ThumbnailProvider* m_thumbnails = nullptr;
   MatteProvider* m_mattes = nullptr;
   EditProvider* m_edits = nullptr;
