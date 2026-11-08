@@ -9045,6 +9045,31 @@ private slots:
     }
   }
 
+  void touchUpSmartCropTakesATintedBacking() {
+    // Some scans come back on a tinted (here cyan) backing, with a deeper
+    // teal shadow fading along one edge of the print.
+    const QImage photo = touchUpPhoto(400, 560);
+    QImage scan(440, 600, QImage::Format_RGB32);
+    scan.fill(qRgb(182, 252, 250));
+    {
+      QPainter painter(&scan);
+      for (int i = 0; i < 6; ++i) {
+        // Darker towards the print, and uneven along its length.
+        const QColor shade(std::max(0, 150 - i * 30), 230 - i * 30, 230 - i * 28);
+        painter.fillRect(QRect(14 + i, 20, 1, 300), shade);
+        painter.fillRect(QRect(14 + i, 320, 1, 260), shade.darker(115));
+      }
+      painter.drawImage(20, 20, photo);
+    }
+    const QRectF area = TouchUp::detectBorder(scan);
+    const QRect found(qRound(area.x() * scan.width()), qRound(area.y() * scan.height()),
+                      qRound(area.width() * scan.width()), qRound(area.height() * scan.height()));
+    const QRect expected(20, 20, 400, 560);
+    QVERIFY2(expected.contains(found), qPrintable(QStringLiteral("%1,%2 %3x%4").arg(found.x())
+                 .arg(found.y()).arg(found.width()).arg(found.height())));
+    QVERIFY(found.width() >= 390 && found.height() >= 550);
+  }
+
   void touchUpSmartCropLeavesBorderlessAndSkyAlone() {
     const QImage photo = touchUpPhoto(320, 240);
     QCOMPARE(TouchUp::detectBorder(photo), QRectF(0, 0, 1, 1));

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -32,17 +33,26 @@ constexpr double kSeamNeutralShare = 0.9;
 constexpr int kSeamMaxGrey = 200;
 // Taken past the border on each trimmed side, as a share of the long edge.
 constexpr double kEdgePad = 0.004;
+// A tinted backing: outer lines this close agree on its colour, and a tinted
+// shadow line may differ this much from the line outside it.
+constexpr int kBackingTolerance = 40;
+constexpr int kShadowStep = 64;
 // Lines that are not border, in a row, before a side's border is over.
 constexpr int kMissedLines = 2;
 
 struct LineClass {
+  // Border by colour alone: neutral backing, light strip or shadow seam.
   bool border = false;
+  // Nearly all one colour, whatever the colour.
+  bool uniform = false;
+  // Share of the line near its median.
+  double evenness = 0.0;
   QRgb median = 0;
 };
 
-bool close(QRgb a, QRgb b) {
+bool close(QRgb a, QRgb b, int tolerance = kLineTolerance) {
   return std::max({std::abs(qRed(a) - qRed(b)), std::abs(qGreen(a) - qGreen(b)),
-                   std::abs(qBlue(a) - qBlue(b))}) < kLineTolerance;
+                   std::abs(qBlue(a) - qBlue(b))}) < tolerance;
 }
 
 // Whether a line is border. Either it is neutral and nearly all one colour
@@ -67,7 +77,6 @@ LineClass classify(const std::vector<QRgb>& pixels) {
   const QRgb centre = qRgb(median(r), median(g), median(b));
   const int chroma = std::max({qRed(centre), qGreen(centre), qBlue(centre)}) -
                      std::min({qRed(centre), qGreen(centre), qBlue(centre)});
-  if (chroma > kNeutralChroma) return {false, centre};
 
   size_t near = 0;
   size_t neutral = 0;
@@ -79,29 +88,54 @@ LineClass classify(const std::vector<QRgb>& pixels) {
   }
   const double count = static_cast<double>(pixels.size());
   const double nearShare = static_cast<double>(near) / count;
-  if (nearShare >= kUniformShare) return {true, centre};
+  const bool uniform = nearShare >= kUniformShare;
+  if (chroma > kNeutralChroma) return {false, uniform, nearShare, centre};
+  if (uniform) return {true, true, nearShare, centre};
   const bool seam = nearShare >= kSeamUniformShare && qGray(centre) < kSeamMaxGrey &&
                     static_cast<double>(neutral) >= kSeamNeutralShare * count;
-  return {seam, centre};
+  return {seam, false, nearShare, centre};
+}
+
+int weakestChannel(QRgb colour) {
+  const int r = qRed(colour);
+  const int g = qGreen(colour);
+  const int b = qBlue(colour);
+  return r <= g && r <= b ? 0 : g <= b ? 1 : 2;
 }
 
 // How many lines, counted in from one side, are wholly border.
+//
+// |backing| is the scanner's backing colour when the outermost lines of most
+// sides agree on one that is not grey (some backings and lids are tinted);
+// then even lines of a tinted colour count, if they are the backing's colour
+// or carry on smoothly from the line before, as a tinted shadow does.
 template <typename LineAt>
-int peel(int lineCount, LineAt lineAt) {
+int peel(int lineCount, LineAt lineAt, std::optional<QRgb> backing) {
   const int limit = static_cast<int>(lineCount * kMaxSideShare);
   std::vector<QRgb> pixels;
   int peeled = 0;
   // A stray line that is not border (a speck of dust, a corner of the print
   // lifting into the first line) does not end the border, but a few do.
   int misses = 0;
+  std::optional<QRgb> previous;
   for (int i = 0; i < limit; ++i) {
     lineAt(i, pixels);
     const LineClass line = classify(pixels);
-    if (!line.border) {
+    // A tinted shadow fades along its length too, so a line carrying on
+    // from the one before needs to be only mostly even, like a grey seam.
+    // It keeps the backing's tint (the same channel weakest), so a smooth
+    // wall or sky of another colour inside the picture never continues it.
+    const bool tinted =
+        backing && ((line.uniform && close(line.median, *backing, kBackingTolerance)) ||
+                    (previous && line.evenness >= kSeamUniformShare &&
+                     weakestChannel(line.median) == weakestChannel(*backing) &&
+                     close(line.median, *previous, kShadowStep)));
+    if (!line.border && !tinted) {
       if (++misses > kMissedLines) break;
       continue;
     }
     misses = 0;
+    previous = line.median;
     peeled = i + 1;
   }
   return peeled;
@@ -144,10 +178,39 @@ QRectF detectBorder(const QImage& image) {
     }
   };
 
-  int top = peel(h, [&](int i, std::vector<QRgb>& out) { row(i, out); });
-  int bottom = peel(h, [&](int i, std::vector<QRgb>& out) { row(h - 1 - i, out); });
-  int left = peel(w, [&](int i, std::vector<QRgb>& out) { column(i, out); });
-  int right = peel(w, [&](int i, std::vector<QRgb>& out) { column(w - 1 - i, out); });
+  // A tinted backing shows as the same even colour on the outermost line of
+  // at least three sides; a blue sky touches only one.
+  std::optional<QRgb> backing;
+  {
+    std::vector<QRgb> pixels;
+    std::vector<QRgb> outer;
+    const auto consider = [&] {
+      const LineClass line = classify(pixels);
+      if (line.uniform && !line.border) outer.push_back(line.median);
+    };
+    row(0, pixels);
+    consider();
+    row(h - 1, pixels);
+    consider();
+    column(0, pixels);
+    consider();
+    column(w - 1, pixels);
+    consider();
+    for (const QRgb candidate : outer) {
+      const auto agreeing = std::count_if(outer.begin(), outer.end(), [candidate](QRgb other) {
+        return close(candidate, other, kBackingTolerance);
+      });
+      if (agreeing >= 3) {
+        backing = candidate;
+        break;
+      }
+    }
+  }
+
+  int top = peel(h, [&](int i, std::vector<QRgb>& out) { row(i, out); }, backing);
+  int bottom = peel(h, [&](int i, std::vector<QRgb>& out) { row(h - 1 - i, out); }, backing);
+  int left = peel(w, [&](int i, std::vector<QRgb>& out) { column(i, out); }, backing);
+  int right = peel(w, [&](int i, std::vector<QRgb>& out) { column(w - 1 - i, out); }, backing);
   if (top + bottom + left + right == 0) return whole;
 
   // A print never sits perfectly square in a sheet-fed scanner, so its edge
