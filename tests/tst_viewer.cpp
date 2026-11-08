@@ -15,6 +15,7 @@
 #include "app/HeadlessAudio.h"
 #include "app/OpenRequest.h"
 #include "app/VideoPlayback.h"
+#include "edit/ImageEditor.h"
 #include "library/MediaInspector.h"
 #include "sources/FileVersion.h"
 #include "sources/ImageBudget.h"
@@ -157,6 +158,7 @@ private slots:
     m_session = new ViewerSession(this);
     m_mediaInfo = new MediaInspector(this);
     m_subtitles = new SubtitleIndex(this);
+    m_editor = new ImageEditor(this);
     // A bus of the test's own, so the player never reaches the desktop's.
     const QString daemon = QStandardPaths::findExecutable(QStringLiteral("dbus-daemon"));
     if (!daemon.isEmpty()) {
@@ -202,6 +204,7 @@ private slots:
     m_context->setContextProperty(QStringLiteral("Session"), m_session);
     m_context->setContextProperty(QStringLiteral("MediaInfo"), m_mediaInfo);
     m_context->setContextProperty(QStringLiteral("Subtitles"), m_subtitles);
+    m_context->setContextProperty(QStringLiteral("ViewerEdit"), m_editor);
 
     QQmlComponent component(m_engine);
     component.loadFromModule("Omaroll", "Viewer");
@@ -1162,6 +1165,121 @@ private slots:
     const QColor color = frame.pixelColor(frame.width() / 2, frame.height() / 2);
     QVERIFY2(color.red() < 10 && color.green() > 150 && color.blue() < 25,
              qPrintable(color.name()));
+  }
+
+  void aRotationCanBeSavedAsACopy() {
+    const QString folder = m_scratch.filePath(QStringLiteral("save-rotation"));
+    QVERIFY(QDir().mkpath(folder));
+    const QString source = folder + QStringLiteral("/a.jpg");
+    QVERIFY(QFile::copy(media(QStringLiteral("Shot 1.jpg")), source));
+    const QSize original = QImageReader(source).size();
+    // Not square, so a turn is visible in the copy's size.
+    QVERIFY(original.isValid() && original.width() != original.height());
+    open({source});
+    QTRY_VERIFY(prop("imageReady").toBool());
+    m_window->setProperty("chromePinned", true);
+    QTRY_VERIFY(item(QStringLiteral("viewerToolbar"))->isVisible());
+
+    QQuickItem* save = item(QStringLiteral("viewerSaveRotation"));
+    QVERIFY(!save->isVisible());
+    click(item(QStringLiteral("viewerRotateRight")));
+    QTRY_VERIFY(save->isVisible());
+    click(save);
+
+    const QString copy = folder + QStringLiteral("/a-edited.jpg");
+    QTRY_VERIFY(QFileInfo::exists(copy));
+    QTRY_COMPARE(QImageReader(copy).size(), original.transposed());
+    // The original is never touched.
+    QCOMPARE(QImageReader(source).size(), original);
+  }
+
+  void aRotationCanReplaceTheOriginal() {
+    const QString folder = m_scratch.filePath(QStringLiteral("replace-rotation"));
+    QVERIFY(QDir().mkpath(folder));
+    const QString source = folder + QStringLiteral("/a.jpg");
+    QVERIFY(QFile::copy(media(QStringLiteral("Shot 1.jpg")), source));
+    const QSize original = QImageReader(source).size();
+    QVERIFY(original.isValid() && original.width() != original.height());
+    open({source});
+    QTRY_VERIFY(prop("imageReady").toBool());
+    m_window->setProperty("chromePinned", true);
+    QTRY_VERIFY(item(QStringLiteral("viewerToolbar"))->isVisible());
+
+    QQuickItem* replace = item(QStringLiteral("viewerReplaceRotation"));
+    QVERIFY(!replace->isVisible());
+    click(item(QStringLiteral("viewerRotateRight")));
+    QTRY_VERIFY(replace->isVisible());
+    const QDateTime modified = QDateTime::currentDateTime().addDays(-30);
+    {
+      QFile file(source);
+      QVERIFY(file.open(QIODevice::ReadWrite));
+      QVERIFY(file.setFileTime(modified, QFileDevice::FileModificationTime));
+    }
+    const bool asked = m_settings->confirmReplace();
+    const auto restore = qScopeGuard([this, asked] { m_settings->setConfirmReplace(asked); });
+    m_settings->setConfirmReplace(true);
+
+    // Saving over the original asks first; cancelling leaves it alone.
+    QQuickItem* confirm = item(QStringLiteral("viewerReplaceConfirm"));
+    const auto within = [confirm](const char* name) {
+      return find(confirm, [name](QQuickItem* candidate) {
+        return candidate->objectName() == QLatin1String(name);
+      });
+    };
+    click(replace);
+    QTRY_VERIFY(confirm->isVisible());
+    click(within("confirmationCancel"));
+    QTRY_VERIFY(!confirm->isVisible());
+    QCOMPARE(QImageReader(source).size(), original);
+
+    // Asked again, "Don't ask me again" turns the question off.
+    click(replace);
+    QTRY_VERIFY(confirm->isVisible());
+    click(within("confirmationCheck"));
+    click(within("confirmationAccept"));
+
+    // The file itself is turned, under its own name, with no copy beside it,
+    // and the view no longer turns it a second time. It keeps its date, so
+    // the library does not move it to the top as the newest picture.
+    QTRY_COMPARE(QImageReader(source).size(), original.transposed());
+    QTRY_COMPARE(prop("viewRotation").toInt(), 0);
+    QVERIFY(!QFileInfo::exists(folder + QStringLiteral("/a-edited.jpg")));
+    QCOMPARE(QFileInfo(source).lastModified().toSecsSinceEpoch(), modified.toSecsSinceEpoch());
+    QVERIFY(!m_settings->confirmReplace());
+  }
+
+  void trashCanStopAsking() {
+    const QString folder = m_scratch.filePath(QStringLiteral("trash-unasked"));
+    QVERIFY(QDir().mkpath(folder));
+    const QString first = folder + QStringLiteral("/a.jpg");
+    const QString second = folder + QStringLiteral("/b.jpg");
+    const QString third = folder + QStringLiteral("/c.jpg");
+    for (const QString& path : {first, second, third}) {
+      QVERIFY(QFile::copy(media(QStringLiteral("Shot 1.jpg")), path));
+    }
+    const bool asked = m_settings->confirmTrash();
+    const auto restore = qScopeGuard([this, asked] { m_settings->setConfirmTrash(asked); });
+    m_settings->setConfirmTrash(true);
+    open({first, second, third});
+    QTRY_VERIFY(prop("imageReady").toBool());
+
+    // "Don't ask me again" turns the question off as it moves the picture.
+    QQuickItem* confirm = item(QStringLiteral("viewerConfirm"));
+    QTest::keyClick(m_window, Qt::Key_Delete);
+    QTRY_VERIFY(confirm->isVisible());
+    click(find(confirm, [](QQuickItem* candidate) {
+      return candidate->objectName() == QLatin1String("confirmationCheck");
+    }));
+    QTest::keyClick(m_window, Qt::Key_Return);
+    QTRY_VERIFY(!QFile::exists(first));
+    QVERIFY(!m_settings->confirmTrash());
+
+    // After that, Delete moves the next one straight away.
+    QTRY_COMPARE(m_session->path(), second);
+    QTest::keyClick(m_window, Qt::Key_Delete);
+    QTRY_VERIFY(!QFile::exists(second));
+    QVERIFY(!confirm->isVisible());
+    QVERIFY(QFile::exists(third));
   }
 
   void theToolbarHasTheCommonPictureControls() {
@@ -3796,6 +3914,7 @@ private:
   ViewerSession* m_session = nullptr;
   MediaInspector* m_mediaInfo = nullptr;
   SubtitleIndex* m_subtitles = nullptr;
+  ImageEditor* m_editor = nullptr;
   ThumbnailProvider* m_thumbnails = nullptr;
   RawImageProvider* m_raws = nullptr;
   LargeImageProvider* m_large = nullptr;

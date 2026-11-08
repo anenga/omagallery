@@ -3,6 +3,9 @@
 #include "edit/ClipboardImage.h"
 #include "edit/CopyOutput.h"
 #include "edit/JpegTransform.h"
+#include "edit/TouchUp.h"
+#include "edit/Upscaler.h"
+#include "sources/Trash.h"
 #include "sources/CameraRaw.h"
 #include "sources/CaptureScanner.h"
 #include "sources/ImageBudget.h"
@@ -15,6 +18,8 @@
 #include <QImageReader>
 #include <QImageWriter>
 #include <QMetaObject>
+#include <QTemporaryDir>
+#include <QUrl>
 #include <QTransform>
 #include <QtConcurrent>
 #include <QtMath>
@@ -94,6 +99,32 @@ struct SaveResult {
   QString output;
   QString error;
 };
+
+// Puts |written|, a fresh copy beside |source|, in |source|'s place. The
+// original goes to the Trash rather than being overwritten: these are often
+// scans of prints that exist nowhere else, and the Trash can give one back.
+SaveResult replaceOriginal(const QString& source, const QString& written) {
+  const QString name = QFileInfo(written).fileName();
+  // The library orders pictures by modification time, so the replacement
+  // keeps the original's: it stays where it was instead of jumping to the
+  // top as the newest picture.
+  const QDateTime modified = QFileInfo(source).lastModified();
+  QString why;
+  if (!Trash::move(source, &why)) {
+    return {written, QStringLiteral("%1; saved as %2 instead").arg(why, name)};
+  }
+  if (!QFile::rename(written, source)) {
+    return {written, QStringLiteral("The original is in the Trash, but the new picture is %1")
+                         .arg(name)};
+  }
+  if (modified.isValid()) {
+    QFile replaced(source);
+    if (replaced.open(QIODevice::ReadWrite)) {
+      replaced.setFileTime(modified, QFileDevice::FileModificationTime);
+    }
+  }
+  return {source, {}};
+}
 
 SaveResult saveTransform(const QString& source, const ImageEditor::Transform& transform) {
   if (CameraRaw::isRawFile(source)) return {{}, kRawRefusal};
@@ -311,6 +342,277 @@ void ImageEditor::saveCopy(const QString& path, int quarterTurns, bool flipHoriz
           m_busy = false;
           emit busyChanged();
           if (!error.isEmpty()) {
+            emit failed(error, jobId);
+          } else {
+            emit saved(output, jobId);
+          }
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+bool ImageEditor::upscalerAvailable() const { return Upscaler::available(); }
+
+bool ImageEditor::canReplace(const QString& path) const {
+  if (path.isEmpty() || CameraRaw::isRawFile(path) || isAnimated(path)) return false;
+  if (!QFileInfo(path).isWritable() || !QFileInfo(QFileInfo(path).absolutePath()).isWritable()) {
+    return false;
+  }
+  const QByteArray format = writableFormat(path);
+  const QByteArray suffix = CaptureScanner::mediaSuffix(path).toLower().toUtf8();
+  return format == suffix || (format == "jpg" && suffix == "jpeg") ||
+         (format == "tiff" && suffix == "tif");
+}
+
+void ImageEditor::replaceWithTurn(const QString& path, int quarterTurns, bool flipHorizontal,
+                                  bool flipVertical, int jobId) {
+  if (m_busy) {
+    emit failed(QStringLiteral("Still saving the last correction"), jobId);
+    return;
+  }
+  if (!QFileInfo::exists(path)) {
+    emit failed(QStringLiteral("That file is no longer there"), jobId);
+    return;
+  }
+  if (!canReplace(path)) {
+    emit failed(QStringLiteral("This picture can only be saved as a copy"), jobId);
+    return;
+  }
+  m_busy = true;
+  emit busyChanged();
+  const QString source = path;
+  (void)QtConcurrent::run([this, source, quarterTurns, flipHorizontal, flipVertical, jobId] {
+    Transform transform;
+    transform.quarterTurns = quarterTurns;
+    transform.flipHorizontal = flipHorizontal;
+    transform.flipVertical = flipVertical;
+    SaveResult result = saveTransform(source, transform);
+    if (result.error.isEmpty()) result = replaceOriginal(source, result.output);
+    const QString output = result.output;
+    const QString error = result.error;
+    QMetaObject::invokeMethod(
+        this,
+        [this, output, error, jobId] {
+          m_busy = false;
+          emit busyChanged();
+          if (!error.isEmpty()) {
+            // The corrected copy was written but could not take the
+            // original's place; it stays, so the library should show it.
+            if (!output.isEmpty() && QFileInfo::exists(output)) emit copyKept(output, jobId);
+            emit failed(error, jobId);
+          } else {
+            emit saved(output, jobId);
+          }
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+QString ImageEditor::upscalerPackage() const { return QString::fromLatin1(Upscaler::kPackage); }
+
+bool ImageEditor::matchesGenerated(const QString& path, int steps, int factor) const {
+  if (!m_generated.folder || m_generated.source != path || m_generated.steps != steps ||
+      m_generated.factor != factor) {
+    return false;
+  }
+  // A file changed on disk since generating is generated again.
+  const QFileInfo info(path);
+  return info.exists() && info.lastModified() == m_generated.sourceModified &&
+         info.size() == m_generated.sourceBytes && QFileInfo::exists(m_generated.file);
+}
+
+bool ImageEditor::hasGeneratedUpscale(const QString& path, int steps, int factor) const {
+  return matchesGenerated(path, steps, factor >= 4 ? 4 : factor >= 2 ? 2 : 0);
+}
+
+void ImageEditor::discardUpscale() {
+  if (m_generateCancel) m_generateCancel->store(true);
+  m_generateCancel.reset();
+  m_generated = Generated{};
+}
+
+void ImageEditor::generateUpscale(const QString& path, int steps, int upscaleFactor, int jobId) {
+  if (m_busy) {
+    emit failed(QStringLiteral("Still working on the last correction"), jobId);
+    return;
+  }
+  const QFileInfo info(path);
+  if (!info.exists()) {
+    emit failed(QStringLiteral("That file is no longer there"), jobId);
+    return;
+  }
+  if (CameraRaw::isRawFile(path)) {
+    emit failed(kRawRefusal, jobId);
+    return;
+  }
+  const int factor = upscaleFactor >= 4 ? 4 : 2;
+  if (!Upscaler::available()) {
+    emit failed(QStringLiteral("Install %1 for AI Uprez").arg(QString::fromLatin1(Upscaler::kPackage)),
+                jobId);
+    return;
+  }
+
+  discardUpscale();
+  auto cancel = std::make_shared<std::atomic_bool>(false);
+  m_generateCancel = cancel;
+  m_busy = true;
+  emit busyChanged();
+
+  Generated pending;
+  pending.source = path;
+  pending.sourceModified = info.lastModified();
+  pending.sourceBytes = info.size();
+  pending.steps = steps;
+  pending.factor = factor;
+
+  (void)QtConcurrent::run([this, pending, cancel, jobId]() mutable {
+    QString error;
+    const QImage image = readOriented(pending.source);
+    if (image.isNull()) {
+      error = ImageBudget::decodeRefusal(ImageBudget::estimate(pending.source));
+      if (error.isEmpty()) {
+        error = QStringLiteral("Could not read %1").arg(QFileInfo(pending.source).fileName());
+      }
+    } else {
+      QImage result = TouchUp::apply(image, pending.steps);
+      if (result.isNull()) {
+        error = QStringLiteral("That touch-up left nothing to upscale");
+      } else {
+        result = Upscaler::upscale(
+            result, pending.factor, kMaxOutputPixels, &error,
+            [this, jobId](qreal done) {
+              QMetaObject::invokeMethod(this, [this, done, jobId] { emit touchUpProgress(done, jobId); },
+                                        Qt::QueuedConnection);
+            },
+            cancel.get());
+      }
+      if (error.isEmpty() && !cancel->load()) {
+        auto folder = std::make_shared<QTemporaryDir>();
+        // Kept for the preview and the save: quick to write, lossless.
+        const QString file = folder->isValid()
+                                 ? folder->filePath(QStringLiteral("uprez-%1.png").arg(jobId))
+                                 : QString();
+        QImageWriter writer(file, "png");
+        writer.setCompression(1);
+        if (file.isEmpty() || !writer.write(result)) {
+          error = QStringLiteral("Could not keep the upscaled picture to preview");
+        } else {
+          pending.folder = std::move(folder);
+          pending.file = file;
+          pending.colorSpace = result.colorSpace();
+        }
+        if (error.isEmpty()) {
+          const QSize size = result.size();
+          QMetaObject::invokeMethod(
+              this,
+              [this, pending, cancel, size, jobId] {
+                m_busy = false;
+                emit busyChanged();
+                if (cancel->load()) return;
+                m_generateCancel.reset();
+                m_generated = pending;
+                emit upscaleReady(QUrl::fromLocalFile(pending.file).toString(), size, jobId);
+              },
+              Qt::QueuedConnection);
+          return;
+        }
+      }
+    }
+    QMetaObject::invokeMethod(
+        this,
+        [this, error, cancel, jobId] {
+          m_busy = false;
+          emit busyChanged();
+          if (cancel->load()) return;
+          m_generateCancel.reset();
+          emit failed(error, jobId);
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor, int jobId,
+                              bool replace) {
+  if (m_busy) {
+    emit failed(QStringLiteral("Still saving the last correction"), jobId);
+    return;
+  }
+  if (!QFileInfo::exists(path)) {
+    emit failed(QStringLiteral("That file is no longer there"), jobId);
+    return;
+  }
+  if (CameraRaw::isRawFile(path)) {
+    emit failed(kRawRefusal, jobId);
+    return;
+  }
+  const int factor = upscaleFactor >= 4 ? 4 : upscaleFactor >= 2 ? 2 : 0;
+  if ((steps & (TouchUp::SmartCrop | TouchUp::AutoFix)) == 0 && factor == 0) {
+    emit failed(QStringLiteral("Choose a touch-up first"), jobId);
+    return;
+  }
+  if (replace && !canReplace(path)) {
+    emit failed(QStringLiteral("This picture can only be saved as a copy"), jobId);
+    return;
+  }
+  // A result generated ahead for exactly this is saved as it was shown.
+  const Generated generated = factor > 0 && matchesGenerated(path, steps, factor) ? m_generated
+                                                                                   : Generated{};
+  if (factor > 0 && !generated.folder && !Upscaler::available()) {
+    emit failed(QStringLiteral("Install %1 for AI Uprez").arg(QString::fromLatin1(Upscaler::kPackage)),
+                jobId);
+    return;
+  }
+
+  m_busy = true;
+  emit busyChanged();
+
+  const QString source = path;
+  (void)QtConcurrent::run([this, source, steps, factor, jobId, replace, generated] {
+    QString output;
+    QString error;
+    QImage result;
+    if (generated.folder) {
+      result = QImage(generated.file);
+      if (result.isNull()) {
+        error = QStringLiteral("Could not read the upscaled picture; generate it again");
+      } else if (generated.colorSpace.isValid()) {
+        result.setColorSpace(generated.colorSpace);
+      }
+    } else {
+      const QImage image = readOriented(source);
+      if (image.isNull()) {
+        error = ImageBudget::decodeRefusal(ImageBudget::estimate(source));
+        if (error.isEmpty()) error = QStringLiteral("Could not read %1").arg(QFileInfo(source).fileName());
+      } else {
+        result = TouchUp::apply(image, steps);
+        if (!result.isNull() && factor > 0) {
+          result = Upscaler::upscale(result, factor, kMaxOutputPixels, &error, [this, jobId](qreal done) {
+            QMetaObject::invokeMethod(this, [this, done, jobId] { emit touchUpProgress(done, jobId); },
+                                      Qt::QueuedConnection);
+          });
+        }
+        if (error.isEmpty() && result.isNull()) error = QStringLiteral("That touch-up left nothing to save");
+      }
+    }
+    if (error.isEmpty()) {
+      output = writeImage(result, composedOutputPath(source, false), writableFormat(source));
+      if (output.isEmpty()) {
+        error = QStringLiteral("Could not safely save a copy beside %1; check its folder")
+                    .arg(QFileInfo(source).fileName());
+      } else if (replace) {
+        const SaveResult replaced = replaceOriginal(source, output);
+        output = replaced.output;
+        error = replaced.error;
+      }
+    }
+
+    QMetaObject::invokeMethod(
+        this,
+        [this, output, error, jobId] {
+          m_busy = false;
+          emit busyChanged();
+          if (!error.isEmpty()) {
+            if (!output.isEmpty() && QFileInfo::exists(output)) emit copyKept(output, jobId);
             emit failed(error, jobId);
           } else {
             emit saved(output, jobId);

@@ -28,6 +28,13 @@ Item {
     readonly property bool thumbnailFailed: thumbnail.status === Image.Error
     property bool checked: false
     property bool selectionMode: false
+    // Gallery tiles drop the card frame and keep the picture edge to edge;
+    // time and size appear on hover, like a photos app.
+    property bool gallery: false
+    readonly property bool hovered: hover.hovered
+    readonly property bool stripShown: !gallery || hover.hovered || keyboardCurrent
+                                       || Settings.showGridFilenames
+                                       || ocrSnippet !== ""
     property string ocrSnippet: ""
     property string caption: ""
     // The camera format of a RAW file, so it reads apart from the JPEG the
@@ -67,6 +74,8 @@ Item {
     signal chosen()
     signal contextRequested(real x, real y)
     signal toggleChecked()
+    // Gallery only: the width over height of the thumbnail that arrived.
+    signal shapeSeen(real ratio)
 
     function shade(base, amount) {
         return Qt.rgba(base.r, base.g, base.b, amount)
@@ -158,9 +167,10 @@ Item {
     Rectangle {
         id: frame
         anchors.fill: parent
-        color: root.shade(Theme.background, root.selected ? 0.62 : 0.34)
-        radius: Theme.cornerRadius
-        border.width: 1
+        color: root.gallery ? root.shade(Theme.foreground, 0.06)
+                            : root.shade(Theme.background, root.selected ? 0.62 : 0.34)
+        radius: root.gallery ? Math.max(Theme.cornerRadius, 6) : Theme.cornerRadius
+        border.width: root.gallery ? 0 : 1
         border.color: root.shade(Theme.foreground, hover.hovered ? 0.22 : 0.10)
         clip: true
 
@@ -169,9 +179,12 @@ Item {
 
         Image {
             id: thumbnail
+            objectName: "captureThumbnail"
             anchors.fill: parent
-            anchors.margins: 1
-            fillMode: Image.PreserveAspectCrop
+            anchors.margins: root.gallery ? 0 : 1
+            // The gallery shows the whole picture, always: if a tile's shape
+            // is still a guess, the picture is letterboxed, never cut.
+            fillMode: root.gallery ? Image.PreserveAspectFit : Image.PreserveAspectCrop
             asynchronous: true
             cache: true
             retainWhileLoading: true
@@ -206,6 +219,9 @@ Item {
                     root.readyPath = root.path
                     root.readyIdentity = root.thumbnailIdentity
                     root.thumbnailReady = true
+                    if (root.gallery && implicitWidth > 0 && implicitHeight > 0) {
+                        root.shapeSeen(implicitWidth / implicitHeight)
+                    }
                 }
             }
 
@@ -244,8 +260,22 @@ Item {
             anchors.bottom: parent.bottom
             height: (root.ocrSnippet !== "" || root.caption !== "" ? 52 : 30)
                     + (Settings.showGridFilenames ? 20 : 0)
-            visible: root.thumbnailReady
+            visible: root.thumbnailReady && root.stripShown && !root.gallery
             color: Qt.rgba(0, 0, 0, 0.72)
+        }
+
+        // The gallery fades its scrim in from the picture instead of a hard
+        // strip, so a hovered tile still reads as one photograph.
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: Math.min(parent.height, 64 + (Settings.showGridFilenames ? 20 : 0))
+            visible: root.thumbnailReady && root.stripShown && root.gallery
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: Qt.rgba(0, 0, 0, 0) }
+                GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.72) }
+            }
         }
 
         Text {
@@ -257,6 +287,7 @@ Item {
             anchors.bottomMargin: 2
             // A search match outranks the caption on the one line there is.
             visible: (root.ocrSnippet !== "" || root.caption !== "") && root.thumbnailReady
+                     && root.stripShown
             text: root.ocrSnippet !== "" ? root.ocrSnippet : root.caption
             elide: Text.ElideRight
             font.family: Theme.fontFamily
@@ -300,6 +331,7 @@ Item {
             anchors.bottom: parent.bottom
             anchors.margins: 8
             spacing: 8
+            visible: root.stripShown
 
             // White over the scrim once the picture is up; theme text over the
             // bare frame before that, or on a light theme it would vanish.
@@ -386,9 +418,9 @@ Item {
             anchors.left: parent.left
             anchors.margins: 7
             visible: root.selectionMode || hover.hovered
-            width: 18
-            height: 18
-            radius: 3
+            width: root.gallery ? 20 : 18
+            height: width
+            radius: root.gallery ? width / 2 : 3
             color: root.checked ? Theme.accent : Qt.rgba(0, 0, 0, 0.5)
             border.width: 1
             border.color: root.checked ? Theme.accent : Qt.rgba(1, 1, 1, 0.5)
@@ -427,11 +459,24 @@ Item {
         // Keep the current/checked outline above the thumbnail and metadata
         // strip. A Rectangle's own border is painted below its children, which
         // let the bottom strip cover the lower edge of the selection.
+        // A gallery tile has no resting border, so hover lifts it with a soft
+        // wash and a faint accent edge instead.
+        Rectangle {
+            anchors.fill: parent
+            z: 19
+            visible: root.gallery
+            radius: frame.radius
+            color: root.shade(Theme.foreground, hover.hovered ? 0.07 : 0)
+            border.width: hover.hovered && !root.selected && !root.checked ? 1 : 0
+            border.color: root.shade(Theme.accent, 0.55)
+            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+        }
+
         Rectangle {
             anchors.fill: parent
             z: 20
             color: "transparent"
-            radius: Theme.cornerRadius
+            radius: frame.radius
             border.width: root.selected || root.checked ? 2 : 0
             border.color: root.checked ? Theme.accent : root.shade(Theme.accent, 0.75)
         }

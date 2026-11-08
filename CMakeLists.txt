@@ -38,6 +38,10 @@ add_library(omaroll_core STATIC
   src/library/SimilarityIndex.h
   src/library/MediaMetadataIndex.cpp
   src/library/MediaMetadataIndex.h
+  src/library/AspectIndex.cpp
+  src/library/AspectIndex.h
+  src/library/GalleryLayout.cpp
+  src/library/GalleryLayout.h
   src/sources/CameraRaw.cpp
   src/sources/CameraRaw.h
   src/sources/RawJpegPairs.cpp
@@ -49,6 +53,8 @@ add_library(omaroll_core STATIC
   src/sources/DisplayColors.h
   src/sources/FileVersion.h
   src/sources/ImageBudget.cpp
+  src/sources/Trash.cpp
+  src/sources/Trash.h
   src/sources/ImageBudget.h
   src/actions/ActionLauncher.cpp
   src/actions/ActionLauncher.h
@@ -57,6 +63,8 @@ add_library(omaroll_core STATIC
   src/actions/ActionRegistry.cpp
   src/actions/ActionRegistry.h
   src/actions/ExternalEditors.cpp
+  src/actions/FileMover.cpp
+  src/actions/FileMover.h
   src/actions/ExternalEditors.h
   src/actions/TailscalePeers.cpp
   src/actions/TailscalePeers.h
@@ -72,6 +80,10 @@ add_library(omaroll_core STATIC
   src/edit/ClipboardText.h
   src/edit/EditProvider.cpp
   src/edit/EditProvider.h
+  src/edit/TouchUp.cpp
+  src/edit/TouchUp.h
+  src/edit/Upscaler.cpp
+  src/edit/Upscaler.h
   src/matte/HueExtractor.cpp
   src/matte/HueExtractor.h
   src/matte/MatteComposer.cpp
@@ -157,6 +169,7 @@ set(OMAROLL_QML_FILES
   qml/components/ActionMenu.qml
   qml/components/CaptureCard.qml
   qml/components/CaptureGrid.qml
+  qml/components/MasonryGallery.qml
   qml/components/DayHeader.qml
   qml/components/Chrome.qml
   qml/components/FilterBar.qml
@@ -169,6 +182,7 @@ set(OMAROLL_QML_FILES
   qml/components/MatteSheet.qml
   qml/components/CorrectionSheet.qml
   qml/components/BatchCorrectionSheet.qml
+  qml/components/TouchUpSheet.qml
   qml/components/CompareSheet.qml
   qml/components/SettingsSheet.qml
   qml/components/EditorChooser.qml
@@ -261,6 +275,9 @@ if(BUILD_TESTING)
   qt_add_executable(omaroll_desktop_action_tests tests/tst_desktop_actions.cpp)
   target_link_libraries(omaroll_desktop_action_tests PRIVATE omaroll_core Qt6::Test)
   add_test(NAME omaroll_desktop_action_tests COMMAND omaroll_desktop_action_tests)
+  qt_add_executable(omaroll_file_mover_tests tests/tst_file_mover.cpp)
+  target_link_libraries(omaroll_file_mover_tests PRIVATE omaroll_core Qt6::Test)
+  add_test(NAME omaroll_file_mover_tests COMMAND omaroll_file_mover_tests)
   qt_add_executable(omaroll_companion_tests tests/tst_companions.cpp)
   target_link_libraries(omaroll_companion_tests PRIVATE omaroll_core Qt6::Test)
   add_test(NAME omaroll_companion_tests COMMAND omaroll_companion_tests)

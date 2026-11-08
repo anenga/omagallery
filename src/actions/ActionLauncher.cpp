@@ -2,6 +2,7 @@
 #include "edit/ClipboardText.h"
 #include "actions/OpenWithRequest.h"
 #include "app/VideoPlayback.h"
+#include "sources/Trash.h"
 #include "edit/ClipboardText.h"
 #include "sources/FileVersion.h"
 
@@ -15,6 +16,7 @@
 #include <QDBusPendingReply>
 #include <QFile>
 #include <QFileInfo>
+#include <QDirIterator>
 #include <QFutureWatcher>
 #include <QtConcurrent>
 #include <QGuiApplication>
@@ -540,22 +542,17 @@ bool ActionLauncher::open(const QString& path) {
 }
 
 bool ActionLauncher::moveToTrash(const QString& path) {
-  if (!QFileInfo::exists(path)) {
-    emit failed(u"That file is no longer there"_s);
-    return false;
-  }
-
-  // Qt creates Trash/files and Trash/info, but expects the XDG data-home
-  // parent to exist. A genuinely fresh account may not have used it yet.
-  QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
-  if (!QFile::moveToTrash(path)) {
-    // Most often a trash directory that does not exist on the volume the file
-    // lives on, which is worth saying rather than hiding behind "failed".
-    emit failed(u"Could not move this file to Trash. Its volume may not support Trash"_s);
+  // A volume with no Trash of its own (a network share) goes to the home
+  // Trash by a verified copy; see Trash::move.
+  QString error;
+  if (!Trash::move(path, &error)) {
+    emit failed(error);
     return false;
   }
   return true;
 }
+
+QString ActionLauncher::trashProblem(const QString& path) const { return Trash::problem(path); }
 
 QVariantMap ActionLauncher::captureFileAction(const QString& path, const QString& expectedMediaPath) {
   QVariantMap target = capturePermanentDelete(path, expectedMediaPath);
@@ -641,7 +638,7 @@ void ActionLauncher::moveDuplicateCopiesToTrash(const QVariantMap& keep, const Q
       }
       // Check versions again after reading, immediately before the move.
       identical = identical && copy.atEnd() && capturedFileMatches(keep) && capturedFileMatches(target);
-      if (identical && QFile::moveToTrash(path)) ++moved;
+      if (identical && Trash::move(path)) ++moved;
       else skipped.append(path);
     }
     return QVariantMap{{u"moved"_s, moved}, {u"skipped"_s, skipped}};
@@ -717,6 +714,86 @@ bool ActionLauncher::deleteCapturedPermanently(const QVariantMap& target) {
     return false;
   }
   return true;
+}
+
+namespace {
+
+// Why the folder must not be deleted wholesale, or empty.
+QString folderDeleteRefusal(const QString& path) {
+  const QFileInfo info(path);
+  if (info.isSymLink()) return u"That is a link to a folder; delete the link in a file manager"_s;
+  if (!info.isDir()) return u"That folder is no longer there"_s;
+  const QString canonical = info.canonicalFilePath();
+  const QString home = QFileInfo(QDir::homePath()).canonicalFilePath();
+  if (canonical.isEmpty() || canonical == u"/"_s || home.startsWith(canonical + u'/') ||
+      canonical == home) {
+    return u"%1 can't be deleted from here"_s.arg(info.fileName().isEmpty() ? canonical : info.fileName());
+  }
+  for (const auto location :
+       {QStandardPaths::DesktopLocation, QStandardPaths::DocumentsLocation, QStandardPaths::MusicLocation,
+        QStandardPaths::MoviesLocation, QStandardPaths::PicturesLocation, QStandardPaths::DownloadLocation,
+        QStandardPaths::GenericDataLocation, QStandardPaths::GenericConfigLocation,
+        QStandardPaths::GenericCacheLocation}) {
+    for (const QString& standard : QStandardPaths::standardLocations(location)) {
+      const QString resolved = QFileInfo(standard).canonicalFilePath();
+      if (!resolved.isEmpty() && (resolved == canonical || resolved.startsWith(canonical + u'/'))) {
+        return u"%1 is one of your standard folders, so it can't be deleted from here"_s.arg(info.fileName());
+      }
+    }
+  }
+  if (!QFileInfo(info.absolutePath()).isWritable()) {
+    return u"%1 is in a folder you can't change"_s.arg(info.fileName());
+  }
+  return {};
+}
+
+} // namespace
+
+QVariantMap ActionLauncher::folderDeleteSummary(const QString& path) const {
+  const QString refusal = folderDeleteRefusal(path);
+  QVariantMap summary{{u"ok"_s, refusal.isEmpty()}, {u"error"_s, refusal},
+                      {u"name"_s, QFileInfo(path).fileName()}};
+  if (!refusal.isEmpty()) return summary;
+  // Counted without following links; a huge tree is summarised, not walked.
+  constexpr int kCountLimit = 100'000;
+  int files = 0;
+  int folders = 0;
+  QDirIterator it(path, QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
+                  QDirIterator::Subdirectories);
+  while (it.hasNext() && files + folders < kCountLimit) {
+    it.next();
+    const QFileInfo entry = it.fileInfo();
+    if (entry.isDir() && !entry.isSymLink()) ++folders;
+    else ++files;
+  }
+  summary.insert(u"files"_s, files);
+  summary.insert(u"folders"_s, folders);
+  summary.insert(u"more"_s, it.hasNext());
+  return summary;
+}
+
+void ActionLauncher::deleteFolderPermanently(const QString& path) {
+  const QString refusal = folderDeleteRefusal(path);
+  if (!refusal.isEmpty()) {
+    emit folderDeleted(path, false, refusal);
+    return;
+  }
+  const QString name = QFileInfo(path).fileName();
+  auto* watcher = new QFutureWatcher<bool>(this);
+  connect(watcher, &QFutureWatcher<bool>::finished, this, [this, watcher, path, name] {
+    watcher->deleteLater();
+    // Judged by what is on disk: removeRecursively stops partway on an
+    // entry it cannot remove, and the rest stays.
+    const bool gone = !QFileInfo::exists(path);
+    emit folderDeleted(path, gone,
+                       gone ? u"Permanently deleted %1"_s.arg(name)
+                            : u"Some of %1 could not be deleted; what is left is still there"_s.arg(name));
+  });
+  watcher->setFuture(QtConcurrent::run([path] {
+    // Checked again right before, in case the folder changed since the prompt.
+    if (!folderDeleteRefusal(path).isEmpty()) return false;
+    return QDir(path).removeRecursively();
+  }));
 }
 
 bool ActionLauncher::deletePermanently(const QString& path) {

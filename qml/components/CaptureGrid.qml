@@ -12,6 +12,12 @@ FocusScope {
     property var model: null
     property alias currentIndex: grid.currentIndex
     property alias count: grid.count
+    // Cards is the uniform grid below; gallery is MasonryGallery, columns that
+    // show every picture whole. The grid stays attached to the model in both
+    // so its current index, selection and relayout handling stay the single
+    // source of truth; in gallery mode it is hidden and shrunk to nothing.
+    readonly property bool gallery: Settings.galleryView
+    readonly property Flickable flick: gallery ? galleryView : grid
     property string currentDayLabel: ""
     property bool layoutReady: true
 
@@ -27,6 +33,8 @@ FocusScope {
 
     signal chosen(int index)
     signal deleteRequested(string path)
+    // The gallery tile under the pointer, for Delete.
+    property string hoveredPath: ""
     signal detailRequested(int index)
     signal contextRequested(int index, real x, real y)
     // Tab and Shift+Tab walk the sections. Handled here as key events rather
@@ -35,9 +43,52 @@ FocusScope {
     // shortcuts match, the press counts as ambiguous, and neither fires.
     signal sectionStepRequested(int step)
 
+    // Switching keeps the same picture current and brings it into view.
+    onGalleryChanged: Qt.callLater(function () {
+        if (root.gallery) {
+            galleryView.rebuild()
+            if (grid.currentIndex >= 0) galleryView.revealItem(grid.currentIndex)
+        } else if (grid.currentIndex >= 0) {
+            grid.positionViewAtIndex(grid.currentIndex, GridView.Contain)
+        }
+        root.updateDay()
+        scrollbar.follow()
+    })
+
+    // Shared by both views' tiles.
+    function activatePath(path) {
+        Captures.commitPendingSearch()
+        const row = Captures.rowOf(path)
+        if (row < 0) return
+        root.selectedPath = path
+        grid.currentIndex = row
+        root.forceActiveFocus()
+    }
+    function choosePath(path) {
+        Captures.commitPendingSearch()
+        const row = Captures.rowOf(path)
+        if (row < 0) return
+        root.selectedPath = path
+        grid.currentIndex = row
+        root.detailRequested(row)
+    }
+    function contextPath(path, x, y) {
+        Captures.commitPendingSearch()
+        const row = Captures.rowOf(path)
+        if (row < 0) return
+        root.selectedPath = path
+        grid.currentIndex = row
+        root.contextRequested(row, x, y)
+    }
+    function togglePath(path) {
+        Captures.commitPendingSearch()
+        if (Captures.rowOf(path) >= 0) root.toggleChecked(path)
+    }
+
     // Include every intersecting cell, including the partial bottom row.
     // Cached offscreen delegates do not count, nor does an empty library.
     function viewportReady() {
+        if (gallery) return visible && layoutReady && galleryView.viewportReady()
         if (!visible || !layoutReady || grid.count === 0 || grid.width <= 0 || grid.height <= 0)
             return false
         const firstRow = Math.max(0, Math.floor((grid.contentY - grid.originY) / grid.cellHeight))
@@ -195,6 +246,12 @@ FocusScope {
     }
 
     function updateDay() {
+        if (gallery) {
+            const top = galleryView.itemAtTop()
+            const first = top >= 0 ? top : (grid.count > 0 ? 0 : -1)
+            root.currentDayLabel = first >= 0 ? Captures.gridLabelAt(first) : ""
+            return
+        }
         const index = grid.indexAt(grid.contentX + 4, grid.contentY + 4)
         if (index >= 0) {
             root.currentDayLabel = Captures.gridLabelAt(index)
@@ -213,9 +270,15 @@ FocusScope {
         // Left from the first tile lands on the last and Right from the last
         // on the first, matching the viewer's Previous and Next.
         keyNavigationWraps: true
-        anchors.fill: parent
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
         anchors.rightMargin: root.scrollbarWidth
-        focus: true
+        // Hidden behind the gallery, the grid keeps only a sliver of
+        // delegates alive while it carries the current index.
+        height: root.gallery ? 1 : parent.height
+        visible: !root.gallery
+        focus: !root.gallery
         clip: true
 
         model: root.layoutReady ? root.model : null
@@ -224,7 +287,7 @@ FocusScope {
         cellWidth: root.cellWidth
         cellHeight: Math.round(root.cellWidth * 0.68)
 
-        cacheBuffer: cellHeight * 4
+        cacheBuffer: root.gallery ? 0 : cellHeight * 4
         boundsBehavior: Flickable.StopAtBounds
         highlight: null
 
@@ -328,45 +391,57 @@ FocusScope {
                 // Dragging a checked tile takes the whole selection with it.
                 dragPaths: root.isChecked(cell.path) ? root.checkedPaths() : [cell.path]
 
-                onActivated: {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    const row = Captures.rowOf(path)
-                    if (row < 0) return
-                    root.selectedPath = path
-                    grid.currentIndex = row
-                    grid.forceActiveFocus()
-                }
-                onChosen: {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    const row = Captures.rowOf(path)
-                    if (row < 0) return
-                    root.selectedPath = path
-                    grid.currentIndex = row
-                    root.detailRequested(row)
-                }
-                onContextRequested: function(x, y) {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    const row = Captures.rowOf(path)
-                    if (row < 0) return
-                    root.selectedPath = path
-                    grid.currentIndex = row
-                    root.contextRequested(row, x, y)
-                }
-                onToggleChecked: {
-                    const path = cell.path
-                    Captures.commitPendingSearch()
-                    if (Captures.rowOf(path) >= 0) root.toggleChecked(path)
-                }
+                onActivated: root.activatePath(cell.path)
+                onChosen: root.choosePath(cell.path)
+                onContextRequested: function(x, y) { root.contextPath(cell.path, x, y) }
+                onToggleChecked: root.togglePath(cell.path)
             }
         }
 
         // Arrows are handled by GridView itself; this adds the vim keys and the
         // ones that act on the selection. Single-letter action keys live in
         // Main so they work whether or not the grid has focus.
-        Keys.onPressed: function (event) {
+        Keys.onPressed: function (event) { root.handleKey(event) }
+    }
+
+    MasonryGallery {
+        id: galleryView
+        objectName: "gallery"
+        owner: root
+        anchors.fill: parent
+        anchors.rightMargin: root.scrollbarWidth
+        visible: root.gallery
+        focus: root.gallery
+        Keys.onPressed: function (event) { root.handleKey(event) }
+    }
+
+    // Arrows are handled by GridView itself in the card grid and here in the
+    // gallery; this adds the vim keys and the ones that act on the selection.
+    function handleKey(event) {
+        const g = root.gallery
+        if (g) {
+            switch (event.key) {
+            case Qt.Key_Left: case Qt.Key_H:
+                galleryView.stepItem(-1); event.accepted = true; return
+            case Qt.Key_Right: case Qt.Key_L:
+                galleryView.stepItem(1); event.accepted = true; return
+            case Qt.Key_Up: case Qt.Key_K:
+                galleryView.stepRow(-1); event.accepted = true; return
+            case Qt.Key_Down: case Qt.Key_J:
+                galleryView.stepRow(1); event.accepted = true; return
+            case Qt.Key_Home:
+                grid.currentIndex = 0
+                galleryView.contentY = 0
+                event.accepted = true
+                return
+            case Qt.Key_End:
+                grid.currentIndex = grid.count - 1
+                galleryView.contentY = Math.max(0, galleryView.contentHeight - galleryView.height)
+                event.accepted = true
+                return
+            }
+        }
+        {
             Captures.commitPendingSearch()
             switch (event.key) {
             case Qt.Key_Return:
@@ -389,7 +464,12 @@ FocusScope {
                     event.accepted = true
                     break
                 }
-                if (grid.currentIndex >= 0) {
+                // In the gallery, Delete takes the picture under the pointer
+                // first, then the current one.
+                if (root.gallery && root.hoveredPath !== "") {
+                    root.deleteRequested(root.hoveredPath)
+                    event.accepted = true
+                } else if (grid.currentIndex >= 0) {
                     root.deleteRequested(Captures.pathAt(grid.currentIndex))
                     event.accepted = true
                 }
@@ -445,18 +525,33 @@ FocusScope {
     ScrollBar {
         id: scrollbar
         orientation: Qt.Vertical
-        policy: grid.contentHeight > grid.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+        policy: root.flick.contentHeight > root.flick.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
 
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         width: root.scrollbarWidth
 
-        size: grid.height / Math.max(grid.contentHeight, 1)
-        position: grid.visibleArea.yPosition
+        size: Math.min(1, root.flick.height / Math.max(root.flick.contentHeight, 1))
+        // Driven from the view rather than bound to it. A binding to
+        // visibleArea re-entered whenever the content height changed under
+        // it, which the gallery does as picture shapes arrive.
+        function follow() {
+            if (pressed) return
+            const target = Math.max(0, Math.min(1 - size, root.flick.visibleArea.yPosition))
+            if (Math.abs(position - target) > 1e-6) position = target
+        }
+        Connections {
+            target: root.flick
+            function onContentYChanged() { scrollbar.follow() }
+            function onContentHeightChanged() { Qt.callLater(scrollbar.follow) }
+            function onHeightChanged() { Qt.callLater(scrollbar.follow) }
+        }
+        onSizeChanged: Qt.callLater(follow)
+        Component.onCompleted: follow()
         onPositionChanged: {
             if (pressed) {
-                grid.contentY = position * grid.contentHeight
+                root.flick.contentY = position * root.flick.contentHeight
             }
         }
 

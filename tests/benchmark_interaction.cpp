@@ -2,6 +2,7 @@
 // Frame submission is not physical presentation. Jumps are not wheel latency;
 // "cold" means a fresh application cache, not a cold OS filesystem cache.
 #include "actions/ActionLauncher.h"
+#include "actions/FileMover.h"
 #include "actions/ActionRegistry.h"
 #include "actions/ExternalEditors.h"
 #include "actions/TailscalePeers.h"
@@ -15,6 +16,7 @@
 #include "library/FolderTreeModel.h"
 #include "library/MediaInspector.h"
 #include "library/MediaMetadataIndex.h"
+#include "library/AspectIndex.h"
 #include "library/SimilarityIndex.h"
 #include "matte/MatteComposer.h"
 #include "matte/MatteProvider.h"
@@ -328,6 +330,7 @@ int main(int argc, char** argv) {
   shared->setContextProperty(u"Theme"_s, &theme); shared->setContextProperty(u"Settings"_s, &settings);
   shared->setContextProperty(u"Actions"_s, &actions); shared->setContextProperty(u"Registry"_s, &registry);
   shared->setContextProperty(u"Editors"_s, new ExternalEditors(&actions, &engine));
+  shared->setContextProperty(u"Mover"_s, new FileMover(&engine));
   shared->setContextProperty(u"DemoMode"_s, false);
   MprisService mpris(&settings, QDBusConnection(QString()));
   shared->setContextProperty(u"Mpris"_s, &mpris);
@@ -493,6 +496,7 @@ int main(int argc, char** argv) {
       QObject::connect(&actions, &ActionLauncher::outputSettled, captures, &CaptureModel::releasePath);
       context->setContextProperty(u"Captures"_s, filtered); context->setContextProperty(u"Library"_s, captures);
       context->setContextProperty(u"MediaMetadata"_s, metadata); context->setContextProperty(u"TextIndex"_s, text);
+      auto* aspects = new AspectIndex(owner); filtered->setAspectIndex(aspects); context->setContextProperty(u"Aspects"_s, aspects);
       context->setContextProperty(u"Duplicates"_s, duplicates); context->setContextProperty(u"Similarities"_s, similar);
       context->setContextProperty(u"MediaInfo"_s, new MediaInspector(owner)); context->setContextProperty(u"PdfInfo"_s, new PdfInspector(owner));
       context->setContextProperty(u"Matte"_s, new MatteComposer(owner)); context->setContextProperty(u"ImageEdit"_s, new ImageEditor(owner));

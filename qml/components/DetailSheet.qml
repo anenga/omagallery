@@ -483,6 +483,57 @@ Item {
         }
     }
 
+    // The view's turn and flips, saved as a corrected copy beside the
+    // original (losslessly for a plain JPEG). The view flips before it turns
+    // and the writer turns before it flips; on a quarter turn a horizontal
+    // flip then reads as a vertical one, so the two swap.
+    readonly property bool viewTransformed: imageRotation !== 0 || imageFlipHorizontal
+                                            || imageFlipVertical
+    property int rotationSaveJob: -1
+    property bool rotationReplacing: false
+    // Save in the original's place was asked for; the window confirms it and
+    // then calls saveViewTransform(true).
+    signal replaceRequested()
+    // Shows the file as it is now, after it was saved over in place.
+    function reloadPicture() {
+        if (root.path !== "") Library.readPicture(root.path)
+    }
+    // |replace| puts the turned picture in the original's place, with the
+    // original moved to the Trash; otherwise a copy is saved beside it.
+    function saveViewTransform(replace) {
+        if (!root.viewTransformed || ImageEdit.busy || root.rotationSaveJob >= 0) return
+        const turns = Math.round(root.imageRotation / 90) % 4
+        const odd = turns % 2 === 1
+        const flipH = odd ? root.imageFlipVertical : root.imageFlipHorizontal
+        const flipV = odd ? root.imageFlipHorizontal : root.imageFlipVertical
+        root.rotationReplacing = replace === true
+        root.rotationSaveJob = ImageEdit.nextJobId()
+        if (root.rotationReplacing) {
+            ImageEdit.replaceWithTurn(root.path, turns, flipH, flipV, root.rotationSaveJob)
+        } else {
+            ImageEdit.saveCopy(root.path, turns, flipH, flipV, 0, 0, 0, 1, 1, 0, 0,
+                               root.rotationSaveJob)
+        }
+    }
+    Connections {
+        target: ImageEdit
+        function onSaved(outputPath, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            root.resetImageView()
+            if (root.rotationReplacing) root.reloadPicture()
+            const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
+            root.statusRequested(root.rotationReplacing
+                                 ? "Saved " + name + "; the original is in the Trash"
+                                 : "Saved " + name)
+        }
+        function onFailed(message, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            root.statusRequested(message)
+        }
+    }
+
     function rotateImage() {
         imageRotation = (imageRotation + 90) % 360
         imageZoom = 1.0
@@ -919,6 +970,15 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 4
 
+                IconButton {
+                    objectName: "viewerTouchUpButton"
+                    visible: !root.isVideo && !root.isDocument && root.path !== ""
+                             && Registry.appliesToKind("touchup", false, false, root.path)
+                    icon: "sparkles"
+                    toolTip: "Touch up: Smart Crop, Auto Fix"
+                    shortcut: "U"
+                    onClicked: root.actionTriggered("touchup")
+                }
                 IconButton {
                     objectName: "viewerFavouriteButton"
                     icon: root.favorite ? "star-filled" : "star"
@@ -2076,6 +2136,23 @@ Item {
                     shortcut: root.viewerShortcuts.flipVertical.label
                     active: root.imageFlipVertical
                     onClicked: root.imageFlipVertical = !root.imageFlipVertical
+                }
+                PillButton {
+                    objectName: "saveViewTransformButton"
+                    visible: root.viewTransformed && !root.isDocument && !root.isVideo
+                             && Registry.appliesToKind("corrections", false, false, root.path)
+                    label: root.rotationSaveJob >= 0 && !root.rotationReplacing ? "Saving…" : "Save copy"
+                    toolTip: "Save the rotated picture as a copy"
+                    active: true
+                    onClicked: root.saveViewTransform(false)
+                }
+                PillButton {
+                    objectName: "replaceViewTransformButton"
+                    visible: root.viewTransformed && !root.isDocument && !root.isVideo
+                             && ImageEdit.canReplace(root.path)
+                    label: root.rotationSaveJob >= 0 && root.rotationReplacing ? "Saving…" : "Save"
+                    toolTip: "Save over the original; the original goes to the Trash"
+                    onClicked: if (root.viewTransformed && root.rotationSaveJob < 0) root.replaceRequested()
                 }
                 PillButton {
                     // At the minimum window width with details shown, even the

@@ -5,7 +5,8 @@
 
 // Live previews for the correction editor, transformed off the GUI thread.
 //
-// Ids arrive as "<quarterTurns>.<flipH>.<flipV>/<absolute path>". The preview
+// Ids arrive as "<quarterTurns>.<flipH>.<flipV>[.<straighten>[.<touchUps>]]/<absolute path>",
+// where touchUps carries TouchUp::Step flags for the touch-up sheet. The preview
 // shows the frame after EXIF orientation and the user's rotate/flip, but before
 // the crop: the crop is drawn as an overlay on top, so dragging it does not
 // re-compose the picture. The source is decoded downscaled; an editor preview

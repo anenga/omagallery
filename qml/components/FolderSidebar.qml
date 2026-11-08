@@ -13,9 +13,23 @@ FocusScope {
     signal addFolderRequested()
     signal gridFocusRequested()
     signal message(string text)
+    // Library tiles dropped on a folder row. Main does the move.
+    signal moveRequested(var paths, string folder)
+    // Delete permanently, from the folder menu; the window confirms it.
+    signal deleteFolderRequested(string path)
 
     function shade(base, amount) { return Qt.rgba(base.r, base.g, base.b, amount) }
     function basename(path) { return String(path).split("/").filter(Boolean).pop() || "/" }
+    function dirname(path) { return String(path).substring(0, String(path).lastIndexOf("/")) || "/" }
+    // Only tiles dragged out of this window move. A drop from another app has
+    // no source here and is ignored, and so is a drop on the folder the files
+    // are already in.
+    function dropPaths(drag, folder) {
+        if (folder === "" || !drag.source || Mover.busy) return []
+        const paths = drag.hasUrls ? Mover.localFiles(drag.urls)
+                    : drag.source.dragPaths !== undefined ? Array.from(drag.source.dragPaths) : []
+        return paths.some(function(path) { return root.dirname(path) !== folder }) ? paths : []
+    }
     function focusTree() {
         tree.forceActiveFocus()
         if (tree.currentRow < 0 && tree.rows > 0) tree.focusRow(0)
@@ -95,13 +109,15 @@ FocusScope {
         property bool branch: false
         property bool expanded: false
         property bool keyboardCurrent: activeFocus
+        readonly property bool dropTarget: dropArea.containsDrag && dropArea.paths.length > 0
         signal activate()
         signal toggle()
         implicitHeight: 34
         radius: Math.min(6, Theme.cornerRadius)
-        color: Captures.folderFilter === path ? root.shade(Theme.accent, 0.18)
+        color: dropTarget ? root.shade(Theme.accent, 0.32)
+                 : Captures.folderFilter === path ? root.shade(Theme.accent, 0.18)
                  : mouse.containsMouse ? root.shade(Theme.foreground, 0.07) : "transparent"
-        border.width: keyboardCurrent ? 1 : 0
+        border.width: dropTarget ? 2 : keyboardCurrent ? 1 : 0
         border.color: Theme.accent
         Accessible.role: Accessible.Button
         Accessible.name: label + (count >= 0 ? ", " + count + " items" : "")
@@ -154,6 +170,31 @@ FocusScope {
                     rowItem.activate()
                 }
             }
+        }
+        DropArea {
+            id: dropArea
+            anchors.fill: parent
+            property var paths: []
+            onEntered: function(drag) {
+                paths = root.dropPaths(drag, rowItem.path)
+                if (paths.length > 0) drag.accept(Qt.CopyAction)
+                else drag.accepted = false
+            }
+            onExited: paths = []
+            onDropped: function(drop) {
+                const moving = paths
+                paths = []
+                if (moving.length === 0) return
+                drop.accept(Qt.CopyAction)
+                root.moveRequested(moving, rowItem.path)
+            }
+        }
+        // Hovering a collapsed folder with a drag opens it, so a subfolder
+        // can be reached without letting go.
+        Timer {
+            interval: 700
+            running: rowItem.dropTarget && rowItem.branch && !rowItem.expanded
+            onTriggered: rowItem.toggle()
         }
         Keys.onReturnPressed: activate()
         Keys.onEnterPressed: activate()
@@ -353,15 +394,18 @@ FocusScope {
         delegate: MenuItem {
             id: menuItem
             implicitHeight: 36
+            readonly property bool destructive: menuItem.action !== null
+                                                && menuItem.action.objectName === "deleteFolderAction"
             contentItem: Text {
                 text: menuItem.text
-                color: Theme.foreground
+                color: menuItem.destructive ? Theme.red : Theme.foreground
                 font.family: Theme.fontFamily
                 font.pixelSize: 12
                 verticalAlignment: Text.AlignVCenter
             }
             background: Rectangle {
-                color: menuItem.highlighted ? root.shade(Theme.accent, 0.2) : "transparent"
+                color: !menuItem.highlighted ? "transparent"
+                       : menuItem.destructive ? root.shade(Theme.red, 0.18) : root.shade(Theme.accent, 0.2)
             }
         }
         Action {
@@ -381,6 +425,17 @@ FocusScope {
         Action {
             text: "Open in file manager"
             onTriggered: Actions.open(folderMenu.path)
+        }
+        MenuSeparator {
+            contentItem: Rectangle {
+                implicitHeight: 1
+                color: root.shade(Theme.foreground, 0.14)
+            }
+        }
+        Action {
+            objectName: "deleteFolderAction"
+            text: "Delete permanently"
+            onTriggered: root.deleteFolderRequested(folderMenu.path)
         }
         onClosed: root.focusTree()
     }

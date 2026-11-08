@@ -45,6 +45,7 @@ constexpr auto kVideoPrimaryAction = "actions/videoPrimary";
 constexpr auto kThumbnailCacheMb = "cache/maximumMb";
 constexpr auto kTileWidth = "view/tileWidth";
 constexpr auto kShowGridFilenames = "view/showGridFilenames";
+constexpr auto kGalleryView = "view/gallery";
 constexpr auto kShowFolderSidebar = "view/showFolderSidebar";
 constexpr auto kFolderSidebarWidth = "view/folderSidebarWidth";
 constexpr auto kPreviewWidth = "view/previewWidth";
@@ -53,6 +54,9 @@ constexpr int kMinimumTileWidth = 160;
 constexpr int kMaximumTileWidth = 480;
 constexpr auto kSlideshowVideos = "slideshow/includeVideos";
 constexpr auto kConfirmPermanentDelete = "actions/confirmPermanentDelete";
+constexpr auto kConfirmReplace = "actions/confirmReplace";
+constexpr auto kConfirmTrash = "actions/confirmTrash";
+constexpr auto kConfirmFolderDelete = "actions/confirmFolderDelete";
 constexpr auto kSlideshowInterval = "slideshow/intervalSeconds";
 constexpr auto kSlideshowShuffle = "slideshow/shuffle";
 constexpr auto kEnlargeSmallPictures = "viewer/enlargeSmallPictures";
@@ -265,12 +269,16 @@ AppSettings::AppSettings(QObject* parent)
   m_tileWidth =
       qBound(kMinimumTileWidth, m_settings.value(kTileWidth, 240).toInt(), kMaximumTileWidth);
   m_showGridFilenames = m_settings.value(kShowGridFilenames, false).toBool();
+  m_galleryView = m_settings.value(kGalleryView, false).toBool();
   m_showFolderSidebar = m_settings.value(kShowFolderSidebar, false).toBool();
   m_folderSidebarWidth = qBound(180, m_settings.value(kFolderSidebarWidth, 240).toInt(), 400);
   m_previewWidth = qBound(500, m_settings.value(kPreviewWidth, 1000).toInt(), 8192);
   m_previewHeight = qBound(360, m_settings.value(kPreviewHeight, 700).toInt(), 8192);
   m_slideshowVideos = m_settings.value(kSlideshowVideos, false).toBool();
   m_confirmPermanentDelete = m_settings.value(kConfirmPermanentDelete, true).toBool();
+  m_confirmReplace = m_settings.value(kConfirmReplace, true).toBool();
+  m_confirmTrash = m_settings.value(kConfirmTrash, true).toBool();
+  m_confirmFolderDelete = m_settings.value(kConfirmFolderDelete, true).toBool();
   m_slideshowIntervalSeconds = qBound(2, m_settings.value(kSlideshowInterval, 4).toInt(), 20);
   m_slideshowShuffle = m_settings.value(kSlideshowShuffle, false).toBool();
   m_enlargeSmallPictures = m_settings.value(kEnlargeSmallPictures, true).toBool();
@@ -533,6 +541,15 @@ void AppSettings::setShowGridFilenames(bool value) {
   emit showGridFilenamesChanged();
 }
 
+void AppSettings::setGalleryView(bool value) {
+  if (m_galleryView == value) {
+    return;
+  }
+  m_galleryView = value;
+  setValue(kGalleryView, value);
+  emit galleryViewChanged();
+}
+
 void AppSettings::setShowFolderSidebar(bool value) {
   if (m_showFolderSidebar == value) return;
   m_showFolderSidebar = value;
@@ -592,6 +609,27 @@ void AppSettings::setConfirmPermanentDelete(bool value) {
   m_confirmPermanentDelete = value;
   setValue(kConfirmPermanentDelete, value);
   emit confirmPermanentDeleteChanged();
+}
+
+void AppSettings::setConfirmReplace(bool value) {
+  if (m_confirmReplace == value) return;
+  m_confirmReplace = value;
+  setValue(kConfirmReplace, value);
+  emit confirmReplaceChanged();
+}
+
+void AppSettings::setConfirmTrash(bool value) {
+  if (m_confirmTrash == value) return;
+  m_confirmTrash = value;
+  setValue(kConfirmTrash, value);
+  emit confirmTrashChanged();
+}
+
+void AppSettings::setConfirmFolderDelete(bool value) {
+  if (m_confirmFolderDelete == value) return;
+  m_confirmFolderDelete = value;
+  setValue(kConfirmFolderDelete, value);
+  emit confirmFolderDeleteChanged();
 }
 
 void AppSettings::setSlideshowIntervalSeconds(int seconds) {

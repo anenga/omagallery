@@ -47,6 +47,9 @@ class AppSettings final : public QObject {
   Q_PROPERTY(int tileWidth READ tileWidth WRITE setTileWidth NOTIFY tileWidthChanged)
   Q_PROPERTY(bool showGridFilenames READ showGridFilenames WRITE setShowGridFilenames NOTIFY
                  showGridFilenamesChanged)
+  // Gallery lays the library out in justified rows that keep each picture's
+  // own shape. Off keeps the uniform card grid.
+  Q_PROPERTY(bool galleryView READ galleryView WRITE setGalleryView NOTIFY galleryViewChanged)
   Q_PROPERTY(bool showFolderSidebar READ showFolderSidebar WRITE setShowFolderSidebar NOTIFY showFolderSidebarChanged)
   Q_PROPERTY(int folderSidebarWidth READ folderSidebarWidth WRITE setFolderSidebarWidth NOTIFY folderSidebarWidthChanged)
   Q_PROPERTY(int previewWidth READ previewWidth WRITE setPreviewWidth NOTIFY previewWidthChanged)
@@ -55,6 +58,13 @@ class AppSettings final : public QObject {
                  slideshowVideosChanged)
   Q_PROPERTY(bool confirmPermanentDelete READ confirmPermanentDelete WRITE setConfirmPermanentDelete NOTIFY
                  confirmPermanentDeleteChanged)
+  // Ask before a corrected picture is saved over its original.
+  Q_PROPERTY(bool confirmReplace READ confirmReplace WRITE setConfirmReplace NOTIFY confirmReplaceChanged)
+  // Ask before moving to Trash.
+  Q_PROPERTY(bool confirmTrash READ confirmTrash WRITE setConfirmTrash NOTIFY confirmTrashChanged)
+  // Ask before a folder is deleted permanently from the sidebar.
+  Q_PROPERTY(bool confirmFolderDelete READ confirmFolderDelete WRITE setConfirmFolderDelete NOTIFY
+                 confirmFolderDeleteChanged)
   // Slideshow timing and order.
   Q_PROPERTY(int slideshowIntervalSeconds READ slideshowIntervalSeconds WRITE
                  setSlideshowIntervalSeconds NOTIFY slideshowIntervalSecondsChanged)
@@ -126,6 +136,8 @@ public:
   void setTileWidth(int width);
   [[nodiscard]] bool showGridFilenames() const { return m_showGridFilenames; }
   void setShowGridFilenames(bool value);
+  [[nodiscard]] bool galleryView() const { return m_galleryView; }
+  void setGalleryView(bool value);
   [[nodiscard]] bool showFolderSidebar() const { return m_showFolderSidebar; }
   void setShowFolderSidebar(bool value);
   [[nodiscard]] int folderSidebarWidth() const { return m_folderSidebarWidth; }
@@ -138,6 +150,12 @@ public:
   void setSlideshowVideos(bool value);
   [[nodiscard]] bool confirmPermanentDelete() const { return m_confirmPermanentDelete; }
   void setConfirmPermanentDelete(bool value);
+  [[nodiscard]] bool confirmReplace() const { return m_confirmReplace; }
+  void setConfirmReplace(bool value);
+  [[nodiscard]] bool confirmTrash() const { return m_confirmTrash; }
+  void setConfirmTrash(bool value);
+  [[nodiscard]] bool confirmFolderDelete() const { return m_confirmFolderDelete; }
+  void setConfirmFolderDelete(bool value);
   [[nodiscard]] int slideshowIntervalSeconds() const { return m_slideshowIntervalSeconds; }
   void setSlideshowIntervalSeconds(int seconds);
   [[nodiscard]] bool slideshowShuffle() const { return m_slideshowShuffle; }
@@ -265,12 +283,16 @@ signals:
   void thumbnailCacheMbChanged();
   void tileWidthChanged();
   void showGridFilenamesChanged();
+  void galleryViewChanged();
   void showFolderSidebarChanged();
   void folderSidebarWidthChanged();
   void previewWidthChanged();
   void previewHeightChanged();
   void slideshowVideosChanged();
   void confirmPermanentDeleteChanged();
+  void confirmReplaceChanged();
+  void confirmTrashChanged();
+  void confirmFolderDeleteChanged();
   void slideshowIntervalSecondsChanged();
   void slideshowShuffleChanged();
   void viewerFilmstripChanged();
@@ -357,12 +379,16 @@ private:
   int m_thumbnailCacheMb = 256;
   int m_tileWidth = 240;
   bool m_showGridFilenames = false;
+  bool m_galleryView = false;
   bool m_showFolderSidebar = false;
   int m_folderSidebarWidth = 240;
   int m_previewWidth = 1000;
   int m_previewHeight = 700;
   bool m_slideshowVideos = false;
   bool m_confirmPermanentDelete = true;
+  bool m_confirmReplace = true;
+  bool m_confirmTrash = true;
+  bool m_confirmFolderDelete = true;
   int m_slideshowIntervalSeconds = 4;
   bool m_slideshowShuffle = false;
   bool m_viewerFilmstrip = false;

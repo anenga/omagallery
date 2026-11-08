@@ -41,6 +41,9 @@ public:
   explicit MediaMetadataIndex(CaptureModel* model, QObject* parent = nullptr);
   ~MediaMetadataIndex() override;
   void requestStop();
+  // Moves these paths, the ones on screen, to the front of the scan. The
+  // order stays newest-first within each part. An empty set clears it.
+  void prioritize(const QSet<QString>& paths);
 
   [[nodiscard]] bool indexing() const { return m_indexing; }
   [[nodiscard]] int completed() const { return m_completed; }
@@ -118,4 +121,6 @@ private:
   bool m_cacheDirty = false;
   int m_completed = 0;
   int m_total = 0;
+  QSet<QString> m_priority;
+  void applyPriority();
 };

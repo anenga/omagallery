@@ -12,6 +12,7 @@
 #include "actions/ActionLauncher.h"
 #include "actions/ActionRegistry.h"
 #include "actions/ExternalEditors.h"
+#include "actions/FileMover.h"
 #include "actions/TailscalePeers.h"
 #include "app/AppSettings.h"
 #include "app/DemoLibrary.h"
@@ -22,6 +23,7 @@
 #include "library/CaptureModel.h"
 #include "library/DuplicateIndex.h"
 #include "library/MediaMetadataIndex.h"
+#include "library/AspectIndex.h"
 #include "library/CaptureRoles.h"
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
@@ -255,6 +257,8 @@ private slots:
     m_mediaInfo = new MediaInspector(this);
     m_pdfInfo = new PdfInspector(this);
     m_mediaMetadata = new MediaMetadataIndex(nullptr, this);
+    m_aspects = new AspectIndex(this);
+    m_library->setAspectIndex(m_aspects);
     m_actions = new ActionLauncher(this);
     m_registry = new ActionRegistry(m_actions, this);
     m_tailscale = new TailscalePeers(this);
@@ -316,6 +320,7 @@ private slots:
     context->setContextProperty(QStringLiteral("Settings"), m_settings);
     context->setContextProperty(QStringLiteral("Registry"), m_registry);
     context->setContextProperty(QStringLiteral("Editors"), new ExternalEditors(m_actions, m_engine));
+    context->setContextProperty(QStringLiteral("Mover"), new FileMover(m_engine));
     context->setContextProperty(QStringLiteral("Matte"), m_matte);
     context->setContextProperty(QStringLiteral("ImageEdit"), m_imageEditor);
     context->setContextProperty(QStringLiteral("TextIndex"), m_textIndex);
@@ -326,6 +331,7 @@ private slots:
     context->setContextProperty(QStringLiteral("MediaInfo"), m_mediaInfo);
     context->setContextProperty(QStringLiteral("PdfInfo"), m_pdfInfo);
     context->setContextProperty(QStringLiteral("MediaMetadata"), m_mediaMetadata);
+    context->setContextProperty(QStringLiteral("Aspects"), m_aspects);
     context->setContextProperty(QStringLiteral("Tailscale"), m_tailscale);
     context->setContextProperty(QStringLiteral("DemoMode"), true);
     // Without a bus connection, so playback never reaches the desktop's.
@@ -757,6 +763,88 @@ private slots:
     QCOMPARE(placeholder->property("text").toString(), QStringLiteral("Preview unavailable"));
     object->setProperty("path", QString());
     QTRY_VERIFY(!object->property("thumbnailFailed").toBool());
+  }
+
+  void trashOnAShareWithoutTrashStillLeavesTheGallery() {
+    // A network share has no Trash; the picture goes to the home Trash by a
+    // copy, and leaves the gallery the same as a local move.
+    QTemporaryDir share;
+    QTemporaryDir home;
+    const QString path = share.filePath(QStringLiteral("share-trash.png"));
+    QImage image(30, 20, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    QVERIFY(image.save(path));
+    m_disposablePaths.append(path);
+    const QByteArray previous = qgetenv("OMAROLL_HOME_TRASH");
+    const bool asked = m_settings->confirmTrash();
+    const auto cleanup = qScopeGuard([&] {
+      if (previous.isEmpty()) qunsetenv("OMAROLL_HOME_TRASH");
+      else qputenv("OMAROLL_HOME_TRASH", previous);
+      m_settings->setConfirmTrash(asked);
+      invoke("dismissTopLayer");
+      m_captures->refresh();
+      QTRY_VERIFY(!m_captures->scanning());
+    });
+    qputenv("OMAROLL_HOME_TRASH", home.path().toLocal8Bit());
+    m_settings->setConfirmTrash(true);
+    m_captures->addExtraFiles({path});
+    QTRY_VERIFY(m_library->rowOf(path) >= 0);
+
+    QVERIFY(QMetaObject::invokeMethod(m_window, "requestDelete", Q_ARG(QVariant, path)));
+    QTRY_VERIFY(item("confirm")->isVisible());
+    QTest::keyClick(m_window, Qt::Key_Return);
+    QTRY_VERIFY(!item("confirm")->isVisible());
+    QTRY_VERIFY(!QFileInfo::exists(path));
+    QVERIFY(QFileInfo::exists(home.filePath(QStringLiteral("files/share-trash.png"))));
+    QTRY_VERIFY_WITH_TIMEOUT(m_captures->rowOf(path) < 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(m_library->rowOf(path) < 0, 10000);
+  }
+
+  void aFolderCanBeDeletedPermanentlyFromTheSidebar() {
+    // Never the home folder or a standard one, whatever is asked.
+    QVERIFY(!m_actions->folderDeleteSummary(QDir::homePath()).value(QStringLiteral("ok")).toBool());
+    QVERIFY(!m_actions->folderDeleteSummary(QStringLiteral("/")).value(QStringLiteral("ok")).toBool());
+
+    QTemporaryDir parent;
+    const QString folder = parent.filePath(QStringLiteral("Old scans"));
+    QVERIFY(QDir().mkpath(folder + QStringLiteral("/inner")));
+    QImage image(30, 20, QImage::Format_RGB32);
+    image.fill(Qt::yellow);
+    const QStringList files{folder + QStringLiteral("/a.png"), folder + QStringLiteral("/inner/b.png")};
+    for (const QString& path : files) {
+      QVERIFY(image.save(path));
+      m_disposablePaths.append(path);
+    }
+    const bool asked = m_settings->confirmFolderDelete();
+    const auto cleanup = qScopeGuard([&] {
+      m_settings->setConfirmFolderDelete(asked);
+      invoke("dismissTopLayer");
+      m_captures->refresh();
+      QTRY_VERIFY(!m_captures->scanning());
+    });
+    m_settings->setConfirmFolderDelete(true);
+    m_captures->addExtraFiles(files);
+    QTRY_VERIFY(m_library->rowOf(files.at(0)) >= 0 && m_library->rowOf(files.at(1)) >= 0);
+
+    const QVariantMap summary = m_actions->folderDeleteSummary(folder);
+    QVERIFY(summary.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(summary.value(QStringLiteral("files")).toInt(), 2);
+    QCOMPARE(summary.value(QStringLiteral("folders")).toInt(), 1);
+
+    // The prompt names the folder and what it holds; "Don't ask me again"
+    // turns it off.
+    QVERIFY(QMetaObject::invokeMethod(m_window, "requestFolderDelete", Q_ARG(QVariant, folder)));
+    QQuickItem* confirm = item("folderDeleteConfirm");
+    QTRY_VERIFY(confirm->isVisible());
+    QVERIFY(confirm->property("title").toString().contains(QStringLiteral("Old scans")));
+    QVERIFY(confirm->property("detail").toString().contains(QStringLiteral("2 files and 1 folder")));
+    QVERIFY(QDir(folder).exists());
+    confirm->setProperty("checked", true);
+    QTest::keyClick(m_window, Qt::Key_Return);
+    QTRY_VERIFY(!confirm->isVisible());
+    QTRY_VERIFY(!QDir(folder).exists());
+    QVERIFY(!m_settings->confirmFolderDelete());
+    for (const QString& path : files) QTRY_VERIFY_WITH_TIMEOUT(m_captures->rowOf(path) < 0, 10000);
   }
 
   void failedTrashTargetsRemainChecked() {
@@ -1526,6 +1614,7 @@ private slots:
     context->setContextProperty(QStringLiteral("Captures"), &thumbnailCaptures);
     context->setContextProperty(QStringLiteral("Library"), m_captures);
     context->setContextProperty(QStringLiteral("MediaMetadata"), m_mediaMetadata);
+    context->setContextProperty(QStringLiteral("Aspects"), m_aspects);
     QStringList warnings;
     connect(&engine, &QQmlEngine::warnings, &engine, [&warnings](const QList<QQmlError>& errors) {
       for (const auto& error : errors) warnings.append(error.toString());
@@ -5507,6 +5596,87 @@ private slots:
   // A small tiled window with large tiles cuts the visible rows off at the
   // bottom. Double-clicking a partly visible tile must open that tile, not
   // whatever the view scrolled under the pointer after the first click.
+  void galleryViewShowsWholePicturesAndKeepsTheCurrentOne() {
+    QQuickItem* grid = item("library");
+    QQuickItem* gallery = item("gallery");
+    QVERIFY(grid);
+    QVERIFY(gallery);
+    const auto restore = qScopeGuard([&] {
+      m_settings->setGalleryView(false);
+      QTest::qWait(300);
+    });
+    QVERIFY(m_library->rowCount() > 4);
+    grid->setProperty("currentIndex", 3);
+    const QString current = pathAt(3);
+
+    m_settings->setGalleryView(true);
+    QTRY_VERIFY_WITH_TIMEOUT(gallery->isVisible() &&
+                                 gallery->property("layout").toMap().value(
+                                     QStringLiteral("ys")).toList().size() == m_library->rowCount(),
+                             5000);
+    QCOMPARE(grid->property("currentIndex").toInt(), 3);
+    QCOMPARE(grid->property("count").toInt(), m_library->rowCount());
+
+    // Every tile on screen is drawn with the whole picture inside it, at the
+    // picture's own shape once its thumbnail is in.
+    const auto wholeTiles = [&]() {
+      int shown = 0;
+      std::function<void(QQuickItem*)> walk = [&](QQuickItem* node) {
+        for (QQuickItem* child : node->childItems()) {
+          if (child->objectName() == QStringLiteral("captureThumbnail") && child->isVisible()) {
+            if (child->property("fillMode").toInt() != 1) return; // PreserveAspectFit
+            ++shown;
+          }
+          walk(child);
+        }
+      };
+      walk(gallery);
+      return shown;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(wholeTiles() > 0, 5000);
+
+    // Right steps to the next picture, as in the card grid.
+    gallery->forceActiveFocus();
+    QTest::keyClick(m_window, Qt::Key_Right);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 4, 2000);
+    QTest::keyClick(m_window, Qt::Key_Left);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
+
+    // Delete asks to trash the picture under the pointer, not the current one.
+    QQuickItem* hovered = nullptr;
+    const qreal top = gallery->property("contentY").toReal();
+    for (QQuickItem* child : gallery->property("contentItem").value<QQuickItem*>()->childItems()) {
+      const QString path = child->property("path").toString();
+      if (child->property("gallery").toBool() && child->isVisible() && !path.isEmpty() &&
+          path != current && child->y() >= top &&
+          child->y() + child->height() <= top + gallery->height()) {
+        hovered = child;
+        break;
+      }
+    }
+    QVERIFY(hovered);
+    const QString hoveredPath = hovered->property("path").toString();
+    QTest::mouseMove(m_window, hovered->mapToScene(QPointF(hovered->width() / 2,
+                                                           hovered->height() / 2)).toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("hoveredPath").toString(), hoveredPath, 2000);
+    QTest::keyClick(m_window, Qt::Key_Delete);
+    QQuickItem* confirm = item("confirm");
+    QTRY_VERIFY(confirm->isVisible());
+    QCOMPARE(confirm->property("detail").toString(), hoveredPath);
+    QTest::keyClick(m_window, Qt::Key_Escape);
+    QTRY_VERIFY(!confirm->isVisible());
+    QVERIFY(QFileInfo::exists(hoveredPath));
+    QTest::mouseMove(m_window, QPoint(1, 1));
+    gallery->forceActiveFocus();
+
+    // G switches back, still on the same picture.
+    QTest::keyClick(m_window, Qt::Key_G);
+    QTRY_VERIFY_WITH_TIMEOUT(!m_settings->galleryView(), 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(!gallery->isVisible(), 2000);
+    QCOMPARE(grid->property("currentIndex").toInt(), 3);
+    QCOMPARE(pathAt(grid->property("currentIndex").toInt()), current);
+  }
+
   void doubleClickOnAPartlyVisibleTileOpensThatTile() {
     QQuickItem* grid = item("library");
     QQuickItem* detail = item("detail");
@@ -5880,6 +6050,7 @@ private:
   MediaInspector* m_mediaInfo = nullptr;
   PdfInspector* m_pdfInfo = nullptr;
   MediaMetadataIndex* m_mediaMetadata = nullptr;
+  AspectIndex* m_aspects = nullptr;
   ThumbnailProvider* m_thumbnails = nullptr;
   MatteProvider* m_mattes = nullptr;
   EditProvider* m_edits = nullptr;

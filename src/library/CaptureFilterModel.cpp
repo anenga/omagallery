@@ -1,5 +1,7 @@
 #include "library/CaptureFilterModel.h"
 
+#include "library/AspectIndex.h"
+#include "library/GalleryLayout.h"
 #include "library/CaptureModel.h"
 #include "library/CaptureRoles.h"
 
@@ -884,6 +886,74 @@ qint64 CaptureFilterModel::stampAt(int row) const {
 
 QString CaptureFilterModel::ocrSnippetAt(int row) const {
   return data(index(row, 0), CaptureRoles::OcrSnippetRole).toString();
+}
+
+QVariantMap CaptureFilterModel::galleryLayout(double width, double targetColumnWidth,
+                                              double spacing, double headerHeight,
+                                              bool grouped) {
+  const int rows = rowCount();
+  QList<double> ratios;
+  ratios.reserve(rows);
+  QStringList labels;
+  if (grouped) {
+    labels.reserve(rows);
+  }
+  for (int row = 0; row < rows; ++row) {
+    const QModelIndex at = index(row, 0);
+    const bool video = at.data(CaptureRoles::IsVideoRole).toBool();
+    const bool document = at.data(CaptureRoles::IsDocumentRole).toBool();
+    ratios.append(m_aspects ? m_aspects->ratio(at.data(CaptureRoles::PathRole).toString(),
+                                               at.data(CaptureRoles::StampRole).toLongLong(),
+                                               video, document)
+                            : (video ? AspectIndex::kVideoRatio
+                                     : document ? AspectIndex::kDocumentRatio
+                                                : AspectIndex::kPhotoRatio));
+    if (grouped) {
+      labels.append(gridLabelAt(row));
+    }
+  }
+  const GalleryLayout::Masonry laid = GalleryLayout::masonry(ratios, labels, width,
+                                                             targetColumnWidth, spacing,
+                                                             headerHeight);
+  QVariantList xs;
+  QVariantList ys;
+  QVariantList hs;
+  xs.reserve(laid.rects.size());
+  ys.reserve(laid.rects.size());
+  hs.reserve(laid.rects.size());
+  for (const QRectF& rect : laid.rects) {
+    xs.append(rect.x());
+    ys.append(rect.y());
+    hs.append(rect.height());
+  }
+  QVariantList headerYs;
+  QStringList headerLabels;
+  for (const GalleryLayout::Header& header : laid.headers) {
+    headerYs.append(header.y);
+    headerLabels.append(header.label);
+  }
+  return {{QStringLiteral("columns"), laid.columns},
+          {QStringLiteral("columnWidth"), laid.columnWidth},
+          {QStringLiteral("height"), laid.height},
+          {QStringLiteral("tallest"), laid.tallest},
+          {QStringLiteral("xs"), xs},
+          {QStringLiteral("ys"), ys},
+          {QStringLiteral("hs"), hs},
+          {QStringLiteral("headerYs"), headerYs},
+          {QStringLiteral("headerLabels"), headerLabels}};
+}
+
+QVariantMap CaptureFilterModel::rowData(int row) const {
+  QVariantMap out;
+  if (row < 0 || row >= rowCount()) {
+    return out;
+  }
+  const QModelIndex at = index(row, 0);
+  const QHash<int, QByteArray> roles = roleNames();
+  for (auto it = roles.constBegin(); it != roles.constEnd(); ++it) {
+    out.insert(QString::fromLatin1(it.value()), at.data(it.key()));
+  }
+  return out;
 }
 
 QVariant CaptureFilterModel::data(const QModelIndex& proxyIndex, int role) const {
