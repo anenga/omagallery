@@ -244,7 +244,7 @@ Flickable {
             const tile = tiles.itemAt(slot)
             if (!tile || tile.item < 0) continue
             if (tile.y + tile.height <= contentY || tile.y >= contentY + height) continue
-            if (!tile.thumbnailPresented) return false
+            if (!tile.thumbnailSettled) return false
         }
         return true
     }

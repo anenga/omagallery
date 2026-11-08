@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QBuffer>
 #include <QHash>
 #include <QImageReader>
 #include <QMutex>
@@ -80,6 +81,32 @@ bool recentlyFailed(const QString& key) {
 void rememberFailure(const QString& key) {
   QMutexLocker lock(&g_negativeMutex);
   g_negativeUntil.insert(key, QDateTime::currentMSecsSinceEpoch() + kNegativeCacheMs);
+}
+
+// Files up to this size are read into memory before decoding.
+constexpr qint64 kWholeReadLimit = 64LL * 1024 * 1024;
+
+// Reads |path| into |bytes|, retrying a read that ends before the file's
+// size. Leaves |bytes| empty for a file too large to hold, which the caller
+// then streams. False when the file cannot be read whole or the request is
+// cancelled.
+bool readWhole(const QString& path, QByteArray& bytes, ThumbnailCache::Cancellation cancelled) {
+  constexpr int kAttempts = 3;
+  for (int attempt = 0; attempt < kAttempts; ++attempt) {
+    if (cancelled.isCancelled()) return false;
+    if (attempt > 0) QThread::msleep(250 * attempt);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) continue;
+    const qint64 expected = file.size();
+    if (expected > kWholeReadLimit) {
+      bytes.clear();
+      return true;
+    }
+    bytes = file.readAll();
+    if (expected > 0 && bytes.size() == expected) return true;
+  }
+  bytes.clear();
+  return false;
 }
 
 // Written as JPEG: these are opaque photographic tiles, and JPEG at 88 keeps a
@@ -155,7 +182,7 @@ QString ThumbnailCache::cacheKey(const QString& path, const QString& renderPath,
 }
 
 QImage ThumbnailCache::renderImage(const QString& path, const QSize& pixelSize, int seekPercent,
-                                  Cancellation cancelled) {
+                                  Cancellation cancelled, ImageOutcome* outcome) {
   if (isCancelled(cancelled)) {
     return {};
   }
@@ -165,8 +192,30 @@ QImage ThumbnailCache::renderImage(const QString& path, const QSize& pixelSize, 
     return CameraRaw::readPreview(path, pixelSize);
   }
 
-  QImageReader reader(path);
+  // Read the file whole and check it against its size before decoding. A
+  // network share can end a read early under load; decoded as it came, that
+  // was a grey-bottomed tile ("premature end of data segment") cached for
+  // good. A short read is retried instead. Huge files stream as before.
+  QByteArray bytes;
+  QBuffer buffer(&bytes);
+  QImageReader reader;
+  if (!readWhole(path, bytes, cancelled)) {
+    if (outcome) outcome->unreadable = true;
+    return {};
+  }
+  if (bytes.isEmpty()) {
+    reader.setFileName(path);
+  } else {
+    buffer.open(QIODevice::ReadOnly);
+    reader.setDevice(&buffer);
+  }
   reader.setAutoTransform(true);
+  // Only formats Qt itself decodes count: a plugin that recognizes a HEIC it
+  // then fails on still leaves ffmpegthumbnailer worth a try.
+  if (outcome) {
+    static const QList<QByteArray> builtIn = {"jpeg", "png", "gif", "bmp", "webp"};
+    outcome->recognized = builtIn.contains(reader.format());
+  }
 
   const QSize original = reader.size();
   if (original.isValid() && !original.isEmpty()) {
@@ -346,15 +395,20 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
   if (isCancelled(cancelled)) {
     return {};
   }
+  ImageOutcome imageOutcome;
   QImage rendered =
       CaptureScanner::isVideo(suffix)      ? renderVideo(renderPath, pixelSize, seekPercent, cancelled)
       : CaptureScanner::isDocument(suffix) ? PdfSupport::renderPage(renderPath, 1, pixelSize * 2)
-                                           : renderImage(renderPath, pixelSize, seekPercent, cancelled);
+                                           : renderImage(renderPath, pixelSize, seekPercent, cancelled,
+                                                         &imageOutcome);
   if (isCancelled(cancelled)) {
     return {};
   }
+  // A picture the share failed to deliver is not a video; asking
+  // ffmpegthumbnailer only spent its timeout before giving up.
   if (rendered.isNull() && !CaptureScanner::isVideo(suffix) &&
-      !CaptureScanner::isDocument(suffix)) {
+      !CaptureScanner::isDocument(suffix) && !imageOutcome.unreadable &&
+      !imageOutcome.recognized) {
     // Video bytes under an image name happen; ffmpegthumbnailer can read it.
     rendered = renderVideo(renderPath, pixelSize, seekPercent, cancelled);
   }
@@ -372,7 +426,9 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
     return {};
   }
   if (rendered.isNull()) {
-    rememberFailure(key);
+    // A read that failed is worth asking again soon; a file that was read
+    // and still gave nothing is not.
+    if (!imageOutcome.unreadable) rememberFailure(key);
     return {};
   }
 

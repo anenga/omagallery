@@ -76,8 +76,14 @@ public:
   static void prune(qint64 maxBytes = kMaxCacheBytes);
 
 private:
+  // Why a picture gave no image, so the caller knows what is worth trying.
+  struct ImageOutcome {
+    bool unreadable = false; // the file could not be read whole: try again later
+    bool recognized = false; // its bytes are a format Qt decodes itself
+  };
   [[nodiscard]] static QImage renderImage(const QString& path, const QSize& pixelSize,
-                                          int seekPercent, Cancellation cancelled);
+                                          int seekPercent, Cancellation cancelled,
+                                          ImageOutcome* outcome = nullptr);
   [[nodiscard]] static QImage renderVideo(const QString& path, const QSize& pixelSize,
                                           int seekPercent, Cancellation cancelled);
   [[nodiscard]] static QString cacheKey(const QString& path, const QString& renderPath,

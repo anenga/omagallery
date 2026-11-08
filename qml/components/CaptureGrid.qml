@@ -98,7 +98,7 @@ FocusScope {
         if (first >= end) return false
         for (let i = first; i < end; ++i) {
             const cell = grid.itemAtIndex(i)
-            if (!cell || !cell.thumbnailPresented) return false
+            if (!cell || !cell.thumbnailSettled) return false
         }
         return true
     }
@@ -343,6 +343,7 @@ FocusScope {
         delegate: Item {
             id: cell
             readonly property bool thumbnailPresented: card.thumbnailPresented
+            readonly property bool thumbnailSettled: card.thumbnailSettled
 
             required property int index
             required property string path

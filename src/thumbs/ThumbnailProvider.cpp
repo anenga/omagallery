@@ -145,6 +145,9 @@ QQuickImageResponse* ThumbnailProvider::requestImageResponse(const QString& id,
     const qsizetype tilde = head.indexOf(QLatin1Char('~'));
     if (tilde > 0) {
       version = head.mid(tilde + 1);
+      // "!<n>" after the version marks a retry, only to get past Qt's cache.
+      const qsizetype retry = version.indexOf(QLatin1Char('!'));
+      if (retry >= 0) version.truncate(retry);
       head = head.left(tilde);
     }
 

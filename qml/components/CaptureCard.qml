@@ -26,6 +26,14 @@ Item {
     property bool selected: false
     property bool keyboardCurrent: false
     readonly property bool thumbnailFailed: thumbnail.status === Image.Error
+    // A tile that failed is asked for again a couple of times, since a busy
+    // network share fails reads it serves fine a moment later.
+    readonly property int thumbnailRetryLimit: 2
+    property int thumbnailRetries: 0
+    // Done loading either way: shown, or failed for good. Startup readiness
+    // waits on this, so one unreadable file cannot hold it forever.
+    readonly property bool thumbnailSettled: thumbnailPresented
+        || (thumbnailFailed && thumbnailRetries >= thumbnailRetryLimit)
     property bool checked: false
     property bool selectionMode: false
     // Gallery tiles drop the card frame and keep the picture edge to edge;
@@ -116,9 +124,21 @@ Item {
     onPathChanged: {
         root.scrubIndex = 0
         root.thumbnailReady = false
+        root.thumbnailRetries = 0
+        thumbnailRetry.stop()
     }
     onStampChanged: root.thumbnailReady = false
-    onThumbnailIdentityChanged: root.thumbnailReady = false
+    onThumbnailIdentityChanged: {
+        root.thumbnailReady = false
+        root.thumbnailRetries = 0
+        thumbnailRetry.stop()
+    }
+
+    Timer {
+        id: thumbnailRetry
+        interval: 2500
+        onTriggered: if (root.thumbnailFailed) root.thumbnailRetries++
+    }
 
     // Drag out and it drops as the real file into anything on the desktop that
     // takes one: a Discord message, a Nautilus window, a browser upload. Copy
@@ -224,12 +244,16 @@ Item {
                     : "image://thumbs/" + root.thumbnailDpr
                       + (root.isVideo ? "@" + root.scrubPercent : "")
                       + "~" + encodeURIComponent(root.thumbnailIdentity)
+                      + (root.thumbnailRetries > 0 ? "!" + root.thumbnailRetries : "")
                       + encodeURIComponent(root.path)
             smooth: true
             mipmap: true
             opacity: root.thumbnailReady ? 1 : 0
 
             onStatusChanged: {
+                if (status === Image.Error && root.thumbnailRetries < root.thumbnailRetryLimit) {
+                    thumbnailRetry.restart()
+                }
                 if (status === Image.Ready) {
                     root.readyPath = root.path
                     root.readyIdentity = root.thumbnailIdentity
