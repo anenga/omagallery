@@ -1,5 +1,6 @@
 #include "viewer/ViewerWindows.h"
 
+#include "edit/ImageEditor.h"
 #include "library/MediaInspector.h"
 #include "app/AppSettings.h"
 #include "subtitles/SubtitleIndex.h"
@@ -32,6 +33,9 @@ struct ViewerWindows::Viewer {
     context.setContextProperty(QStringLiteral("Session"), &session);
     context.setContextProperty(QStringLiteral("MediaInfo"), &mediaInfo);
     context.setContextProperty(QStringLiteral("Subtitles"), &subtitles);
+    // The viewer's own writer, for saving a rotation as a copy; the library's
+    // may not exist in a viewer-only process.
+    context.setContextProperty(QStringLiteral("ViewerEdit"), &editor);
     QQmlComponent component(&engine);
     component.loadFromModule("Omaroll", "Viewer");
     root.reset(component.create(&context));
@@ -67,6 +71,7 @@ struct ViewerWindows::Viewer {
   ViewerSession session;
   MediaInspector mediaInfo;
   SubtitleIndex subtitles;
+  ImageEditor editor;
   QQmlContext context;
   // Last, so the window goes before the context and services it binds to.
   std::unique_ptr<QObject> root;

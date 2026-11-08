@@ -11,6 +11,10 @@ Item {
     property string title: ""
     property string detail: ""
     property string confirmLabel: "Confirm"
+    // An optional "Don't ask again" style check, cleared on each open. Read
+    // |checked| in onAccepted.
+    property string checkLabel: ""
+    property bool checked: false
 
     signal accepted()
 
@@ -19,6 +23,7 @@ Item {
     }
 
     function open() {
+        checked = false
         visible = true
         forceActiveFocus()
     }
@@ -112,7 +117,60 @@ Item {
                     font.family: Theme.fontFamily
                     font.pixelSize: 12
                     color: Theme.mutedText
-                    wrapMode: Text.WrapAnywhere
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                }
+            }
+
+            Item {
+                id: checkRow
+                objectName: "confirmationCheck"
+                visible: root.checkLabel !== ""
+                width: parent.width
+                height: 28
+                activeFocusOnTab: visible
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: root.checkLabel
+                Accessible.checkable: true
+                Accessible.checked: root.checked
+                Accessible.onToggleAction: root.checked = !root.checked
+                Accessible.onPressAction: root.checked = !root.checked
+                Keys.onSpacePressed: root.checked = !root.checked
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.checked = !root.checked
+                }
+                Rectangle {
+                    id: box
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 16
+                    height: 16
+                    radius: 3
+                    color: root.checked ? Theme.accent : "transparent"
+                    border.width: checkRow.activeFocus ? 2 : 1.5
+                    border.color: root.checked || checkRow.activeFocus
+                                  ? Theme.accent : root.shade(Theme.foreground, 0.4)
+                    Text {
+                        anchors.centerIn: parent
+                        visible: root.checked
+                        text: "✓"
+                        font.pixelSize: 11
+                        font.weight: Font.Bold
+                        color: Theme.background
+                    }
+                }
+                Text {
+                    anchors.left: box.right
+                    anchors.leftMargin: 8
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.checkLabel
+                    elide: Text.ElideRight
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                    color: Theme.foreground
                 }
             }
 
@@ -123,11 +181,13 @@ Item {
                 spacing: 8
 
                 PillButton {
+                    objectName: "confirmationCancel"
                     label: "Cancel"
                     onClicked: root.close()
                 }
 
                 PillButton {
+                    objectName: "confirmationAccept"
                     label: root.confirmLabel
                     active: true
                     onClicked: {

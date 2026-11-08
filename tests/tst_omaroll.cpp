@@ -24,6 +24,8 @@
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
 #include "edit/ImageEditor.h"
+#include "edit/Upscaler.h"
+#include "edit/TouchUp.h"
 #include "edit/ClipboardImage.h"
 #include "edit/ClipboardText.h"
 #include "edit/CopyOutput.h"
@@ -38,6 +40,7 @@
 #include "sources/CameraRaw.h"
 #include "sources/CaptureLocations.h"
 #include "sources/CaptureScanner.h"
+#include "sources/Trash.h"
 #include "sources/FileVersion.h"
 #include "theme/OmarchyTheme.h"
 #include "thumbs/ThumbnailCache.h"
@@ -6737,7 +6740,7 @@ private slots:
     for (const QString& id :
          {QStringLiteral("annotate"), QStringLiteral("omaframe"), QStringLiteral("ocr"), QStringLiteral("qr"),
           QStringLiteral("edit"), QStringLiteral("view"), QStringLiteral("background"),
-          QStringLiteral("print"), QStringLiteral("corrections"),
+          QStringLiteral("print"), QStringLiteral("corrections"), QStringLiteral("touchup"),
           QStringLiteral("correctionsbatch")}) {
       QVERIFY2(!offered.contains(id), qPrintable(id));
       QVERIFY2(!registry.appliesToKind(id, false, false, raw), qPrintable(id));
@@ -9039,6 +9042,328 @@ private slots:
                                                    MatteComposer::Original, 0.08);
       QVERIFY2(!result.isNull(), qPrintable(QStringLiteral("matte %1 was null").arg(matte)));
     }
+  }
+
+  // --- Touch-ups ---------------------------------------------------------
+
+  // A noisy, colourful "photo" so no line inside it reads as uniform.
+  static QImage touchUpPhoto(int w, int h) {
+    QImage photo(w, h, QImage::Format_RGB32);
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        photo.setPixel(x, y, qRgb((x * 7 + y * 3) % 200 + 30, (x * 13) % 180 + 40,
+                                  (y * 11 + x) % 220 + 20));
+      }
+    }
+    return photo;
+  }
+
+  void touchUpSmartCropFindsScannerBorder() {
+    // A dark scanner backing, then a thin light strip at the print's edge.
+    const QImage photo = touchUpPhoto(400, 300);
+    QImage scan(460, 350, QImage::Format_RGB32);
+    scan.fill(qRgb(18, 18, 20));
+    {
+      QPainter painter(&scan);
+      painter.fillRect(QRect(26, 21, 408, 308), QColor(225, 225, 228));
+      painter.drawImage(30, 25, photo);
+    }
+    const QRectF area = TouchUp::detectBorder(scan);
+    const QRect found(qRound(area.x() * scan.width()), qRound(area.y() * scan.height()),
+                      qRound(area.width() * scan.width()), qRound(area.height() * scan.height()));
+    const QRect expected(30, 25, 400, 300);
+    // All of the border gone, and at most a hair of the picture with it.
+    QVERIFY2(expected.contains(found), qPrintable(QStringLiteral("%1,%2 %3x%4").arg(found.x())
+                 .arg(found.y()).arg(found.width()).arg(found.height())));
+    QVERIFY(found.width() >= 394 && found.height() >= 294);
+
+    const QImage cropped = TouchUp::apply(scan, TouchUp::SmartCrop);
+    QCOMPARE(cropped.size(), found.size());
+  }
+
+  void touchUpSmartCropFollowsASlantedEdge() {
+    // How a sheet-fed scanner sees a print: on its light backing, fed a
+    // little askew, with an uneven grey shadow seam along the trailing edge.
+    const QImage photo = touchUpPhoto(600, 400);
+    QImage scan(660, 460, QImage::Format_RGB32);
+    scan.fill(qRgb(236, 236, 238));
+    {
+      QPainter painter(&scan);
+      painter.setRenderHint(QPainter::SmoothPixmapTransform);
+      painter.setRenderHint(QPainter::Antialiasing);
+      painter.translate(330, 230);
+      painter.rotate(0.15);
+      // The seam: darkest against the print, fading out, and deeper at one end.
+      for (int i = 0; i < 6; ++i) {
+        const int grey = 60 + i * 28;
+        painter.fillRect(QRectF(-300, 200 + i, 600, 1), QColor(grey, grey, grey + 2));
+      }
+      painter.fillRect(QRectF(0, 206, 300, 2), QColor(200, 200, 202));
+      painter.drawImage(-300, -200, photo);
+    }
+    const QImage cropped = TouchUp::apply(scan, TouchUp::SmartCrop);
+    QVERIFY2(cropped.width() >= 570 && cropped.height() >= 370,
+             qPrintable(QStringLiteral("%1x%2").arg(cropped.width()).arg(cropped.height())));
+
+    // No band of backing or seam survives along any edge: what is left on
+    // each outermost line is the picture, not grey.
+    const auto grey = [](QRgb p) {
+      return std::max({qRed(p), qGreen(p), qBlue(p)}) - std::min({qRed(p), qGreen(p), qBlue(p)}) <= 12;
+    };
+    const auto share = [&](bool row, int at) {
+      const int n = row ? cropped.width() : cropped.height();
+      int count = 0;
+      for (int i = 0; i < n; ++i) {
+        if (grey(row ? cropped.pixel(i, at) : cropped.pixel(at, i))) ++count;
+      }
+      return double(count) / n;
+    };
+    for (const auto& [row, at] : {std::pair{true, 0}, std::pair{true, cropped.height() - 1},
+                                  std::pair{false, 0}, std::pair{false, cropped.width() - 1}}) {
+      const double s = share(row, at);
+      QVERIFY2(s < 0.1, qPrintable(QStringLiteral("%1 %2: %3").arg(row ? "row" : "column").arg(at).arg(s)));
+    }
+  }
+
+  void touchUpSmartCropStopsAtADarkPicture() {
+    // A night shot: the print's sides are nearly black, low in colour and
+    // even, like a border, but far wider than any shadow seam.
+    QImage photo = touchUpPhoto(600, 400);
+    for (int y = 0; y < photo.height(); ++y) {
+      for (int x = 0; x < photo.width(); ++x) {
+        if (x < 210 || x >= 480) {
+          const int v = 6 + (x * 7 + y * 13) % 9;
+          photo.setPixel(x, y, qRgb(v, v, v + 2));
+        }
+      }
+    }
+    QImage scan(640, 440, QImage::Format_RGB32);
+    scan.fill(qRgb(236, 236, 238));
+    {
+      QPainter painter(&scan);
+      painter.fillRect(QRect(18, 18, 604, 404), QColor(52, 52, 54));
+      painter.drawImage(20, 20, photo);
+    }
+    const QRectF area = TouchUp::detectBorder(scan);
+    const QRect found(qRound(area.x() * scan.width()), qRound(area.y() * scan.height()),
+                      qRound(area.width() * scan.width()), qRound(area.height() * scan.height()));
+    const QString shown = QStringLiteral("%1,%2 %3x%4").arg(found.x()).arg(found.y())
+                              .arg(found.width()).arg(found.height());
+    // The backing and seam go; the dark picture stays, give or take the pad.
+    QVERIFY2(QRect(20, 20, 600, 400).contains(found), qPrintable(shown));
+    QVERIFY2(found.width() >= 588 && found.height() >= 388, qPrintable(shown));
+  }
+
+  void touchUpSmartCropTakesAWedgeOfBacking() {
+    // A print fed askew leaves a sliver of backing along one edge, the full
+    // strip at one end thinning to nothing partway along.
+    const QImage photo = touchUpPhoto(600, 400);
+    QImage scan(640, 440, QImage::Format_RGB32);
+    scan.fill(qRgb(236, 236, 238));
+    {
+      QPainter painter(&scan);
+      painter.drawImage(20, 20, photo);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(QColor(236, 236, 238));
+      painter.drawPolygon(QPolygon({QPoint(300, 20), QPoint(620, 20), QPoint(620, 30)}));
+    }
+    // The wedge's ten lines go too, but not much more.
+    const QImage cropped = TouchUp::apply(scan, TouchUp::SmartCrop);
+    QVERIFY2(cropped.width() >= 588 && cropped.height() >= 380,
+             qPrintable(QStringLiteral("%1x%2").arg(cropped.width()).arg(cropped.height())));
+    int bright = 0;
+    for (int x = 0; x < cropped.width(); ++x) {
+      if (qGray(cropped.pixel(x, 0)) >= 230) ++bright;
+    }
+    QVERIFY2(bright < cropped.width() / 20, qPrintable(QString::number(bright)));
+  }
+
+  void touchUpSmartCropTakesATintedBacking() {
+    // Some scans come back on a tinted (here cyan) backing, with a deeper
+    // teal shadow fading along one edge of the print.
+    const QImage photo = touchUpPhoto(400, 560);
+    QImage scan(440, 600, QImage::Format_RGB32);
+    scan.fill(qRgb(182, 252, 250));
+    {
+      QPainter painter(&scan);
+      for (int i = 0; i < 6; ++i) {
+        // Darker towards the print, and uneven along its length.
+        const QColor shade(std::max(0, 150 - i * 30), 230 - i * 30, 230 - i * 28);
+        painter.fillRect(QRect(14 + i, 20, 1, 300), shade);
+        painter.fillRect(QRect(14 + i, 320, 1, 260), shade.darker(115));
+      }
+      painter.drawImage(20, 20, photo);
+    }
+    const QRectF area = TouchUp::detectBorder(scan);
+    const QRect found(qRound(area.x() * scan.width()), qRound(area.y() * scan.height()),
+                      qRound(area.width() * scan.width()), qRound(area.height() * scan.height()));
+    const QRect expected(20, 20, 400, 560);
+    QVERIFY2(expected.contains(found), qPrintable(QStringLiteral("%1,%2 %3x%4").arg(found.x())
+                 .arg(found.y()).arg(found.width()).arg(found.height())));
+    QVERIFY(found.width() >= 390 && found.height() >= 550);
+  }
+
+  void touchUpSmartCropLeavesBorderlessAndSkyAlone() {
+    const QImage photo = touchUpPhoto(320, 240);
+    QCOMPARE(TouchUp::detectBorder(photo), QRectF(0, 0, 1, 1));
+
+    // A clear blue sky across the top is uniform but not neutral: picture.
+    QImage sky = photo;
+    {
+      QPainter painter(&sky);
+      painter.fillRect(QRect(0, 0, 320, 60), QColor(90, 150, 230));
+    }
+    QCOMPARE(TouchUp::detectBorder(sky), QRectF(0, 0, 1, 1));
+  }
+
+  void touchUpAutoFixStretchesAFadedPrint() {
+    // A faded print: everything squeezed into a grey, warm middle band.
+    QImage faded(200, 100, QImage::Format_RGB32);
+    for (int y = 0; y < 100; ++y) {
+      for (int x = 0; x < 200; ++x) {
+        const int v = 90 + x * 80 / 199;
+        faded.setPixel(x, y, qRgb(std::min(255, v + 20), v, std::max(0, v - 15)));
+      }
+    }
+    const QImage fixed = TouchUp::autoFix(faded);
+    QCOMPARE(fixed.size(), faded.size());
+    const QRgb dark = fixed.pixel(0, 50);
+    const QRgb light = fixed.pixel(199, 50);
+    // Stretched well past the faded band's ends (90..170 grey), but held
+    // short of crushing: a fade is never treated as pure black.
+    QVERIFY2(qGray(dark) < 50, qPrintable(QString::number(qGray(dark))));
+    QVERIFY2(qGray(light) > 225, qPrintable(QString::number(qGray(light))));
+    // The warm cast (red 35 above blue) is reduced, not reversed.
+    const int cast = qRed(light) - qBlue(light);
+    QVERIFY2(cast >= 0 && cast < 35, qPrintable(QString::number(cast)));
+    QVERIFY(TouchUp::autoFix(QImage()).isNull());
+  }
+
+  void trashWithoutAVolumeTrashCopiesIntoTheHomeTrash() {
+    // As on a network share with no Trash of its own: the move goes to the
+    // home Trash by a checked copy, restorable to where it was.
+    QTemporaryDir share;
+    QTemporaryDir home;
+    QVERIFY(share.isValid() && home.isValid());
+    const QByteArray previous = qgetenv("OMAROLL_HOME_TRASH");
+    const auto restore = qScopeGuard([previous] {
+      if (previous.isEmpty()) qunsetenv("OMAROLL_HOME_TRASH");
+      else qputenv("OMAROLL_HOME_TRASH", previous);
+    });
+    qputenv("OMAROLL_HOME_TRASH", home.path().toLocal8Bit());
+    QCOMPARE(Trash::homeTrash(), home.path());
+
+    QByteArray bytes(3 * 1024 * 1024 + 17, Qt::Uninitialized);
+    for (qsizetype i = 0; i < bytes.size(); ++i) bytes[i] = char((i * 31) % 251);
+    const QString first = share.filePath(QStringLiteral("Print 1985.jpg"));
+    for (const QString& path : {first, share.filePath(QStringLiteral("other/Print 1985.jpg"))}) {
+      QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+      QFile file(path);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      QCOMPARE(file.write(bytes), bytes.size());
+    }
+
+    QString error;
+    QVERIFY2(Trash::move(first, &error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(first));
+    QFile kept(home.filePath(QStringLiteral("files/Print 1985.jpg")));
+    QVERIFY(kept.open(QIODevice::ReadOnly));
+    QCOMPARE(kept.readAll(), bytes);
+    QFile record(home.filePath(QStringLiteral("info/Print 1985.jpg.trashinfo")));
+    QVERIFY(record.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(record.readAll());
+    QVERIFY(text.startsWith(QStringLiteral("[Trash Info]\n")));
+    QVERIFY2(text.contains(QStringLiteral("Path=") + QString::fromLatin1(QUrl::toPercentEncoding(first, "/"))),
+             qPrintable(text));
+    QVERIFY(text.contains(QStringLiteral("DeletionDate=")));
+
+    // The same name again takes the next free one, never overwriting.
+    const QString second = share.filePath(QStringLiteral("other/Print 1985.jpg"));
+    QVERIFY(Trash::move(second, &error));
+    QVERIFY(QFileInfo::exists(home.filePath(QStringLiteral("files/Print 1985.2.jpg"))));
+    QVERIFY(QFileInfo::exists(home.filePath(QStringLiteral("info/Print 1985.2.jpg.trashinfo"))));
+
+    // When the home Trash cannot take it, the original stays put.
+    const QString third = share.filePath(QStringLiteral("third.jpg"));
+    QVERIFY(QFile::copy(home.filePath(QStringLiteral("files/Print 1985.jpg")), third));
+    qputenv("OMAROLL_HOME_TRASH", share.filePath(QStringLiteral("third.jpg/not-a-folder")).toLocal8Bit());
+    QVERIFY(!Trash::move(third, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(QFileInfo::exists(third));
+    QCOMPARE(QFileInfo(third).size(), bytes.size());
+
+    QVERIFY(!Trash::problem(share.filePath(QStringLiteral("gone.jpg"))).isEmpty());
+    QVERIFY(Trash::problem(third).isEmpty());
+  }
+
+  void touchUpGeneratedUprezIsSavedWithoutRunningAgain() {
+    // A stand-in for Real-ESRGAN that hands the picture back unchanged;
+    // Omaroll scales it to the factor asked for.
+    QTemporaryDir work;
+    QVERIFY(work.isValid());
+    const QString bin = work.filePath(QStringLiteral("bin"));
+    QVERIFY(QDir().mkpath(bin));
+    const QString tool = bin + QLatin1Char('/') + QString::fromLatin1(Upscaler::kProgram);
+    const QString cp = QStandardPaths::findExecutable(QStringLiteral("cp"));
+    QVERIFY(!cp.isEmpty());
+    {
+      QFile script(tool);
+      QVERIFY(script.open(QIODevice::WriteOnly));
+      script.write("#!/bin/sh\n"
+                   "while [ $# -gt 0 ]; do case $1 in -i) i=$2; shift;; -o) o=$2; shift;; esac; shift; done\n"
+                   "echo '50.00%' >&2\n" +
+                   cp.toLocal8Bit() + " \"$i\" \"$o\"\n");
+    }
+    QVERIFY(QFile::setPermissions(tool, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    const QByteArray path = qgetenv("PATH");
+    const auto restorePath = qScopeGuard([path] { qputenv("PATH", path); });
+    // Only the stand-in: a real Real-ESRGAN installed on this machine must
+    // not be found once the stand-in is removed.
+    qputenv("PATH", bin.toLocal8Bit());
+    QVERIFY(Upscaler::available());
+
+    const QString source = work.filePath(QStringLiteral("scan.png"));
+    QVERIFY(touchUpPhoto(64, 48).save(source));
+
+    ImageEditor editor;
+    QSignalSpy ready(&editor, &ImageEditor::upscaleReady);
+    QSignalSpy failed(&editor, &ImageEditor::failed);
+    QSignalSpy saved(&editor, &ImageEditor::saved);
+
+    // Stopped straight away, nothing is reported for it.
+    editor.generateUpscale(source, TouchUp::None, 2, 1);
+    editor.discardUpscale();
+    QTRY_VERIFY(!editor.busy());
+    QTest::qWait(50);
+    QCOMPARE(ready.count(), 0);
+    QCOMPARE(failed.count(), 0);
+
+    editor.generateUpscale(source, TouchUp::None, 2, 2);
+    QTRY_COMPARE(ready.count(), 1);
+    QCOMPARE(failed.count(), 0);
+    QCOMPARE(ready.first().at(1).toSize(), QSize(128, 96));
+    QCOMPARE(ready.first().at(2).toInt(), 2);
+    QCOMPARE(QImage(QUrl(ready.first().at(0).toString()).toLocalFile()).size(), QSize(128, 96));
+    QTRY_VERIFY(!editor.busy());
+    QVERIFY(editor.hasGeneratedUpscale(source, TouchUp::None, 2));
+    QVERIFY(!editor.hasGeneratedUpscale(source, TouchUp::None, 4));
+    QVERIFY(!editor.hasGeneratedUpscale(source, TouchUp::AutoFix, 2));
+
+    // Without the tool, only the generated result can be what is saved.
+    QVERIFY(QFile::remove(tool));
+    editor.saveTouchUp(source, TouchUp::None, 2, 3);
+    QTRY_COMPARE(saved.count() + failed.count(), 1);
+    QCOMPARE(failed.count(), 0);
+    const QString output = saved.first().at(0).toString();
+    QCOMPARE(QImage(output).size(), QSize(128, 96));
+    QCOMPARE(QImage(source).size(), QSize(64, 48));
+
+    // Once discarded, saving would need the tool again.
+    editor.discardUpscale();
+    QVERIFY(!editor.hasGeneratedUpscale(source, TouchUp::None, 2));
+    editor.saveTouchUp(source, TouchUp::None, 2, 4);
+    QTRY_COMPARE(failed.count(), 1);
+    QVERIFY(failed.first().at(0).toString().contains(QString::fromLatin1(Upscaler::kPackage)));
   }
 
   // --- Quick image corrections ------------------------------------------

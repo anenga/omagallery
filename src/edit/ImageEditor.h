@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QColorSpace>
+#include <QDateTime>
 #include <QImage>
 #include <QObject>
 #include <QRect>
@@ -8,6 +10,11 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
+
+#include <atomic>
+#include <memory>
+
+class QTemporaryDir;
 
 // Quick, non-destructive image corrections.
 //
@@ -79,6 +86,41 @@ public:
                             qreal cropWidth, qreal cropHeight, int targetWidth, int targetHeight,
                             int jobId = 0);
 
+  // Writes "<stem>-edited.<ext>" with the one-click touch-ups (TouchUp::Step
+  // flags: Smart Crop, Auto Fix) applied to the EXIF-oriented picture, then,
+  // when |upscaleFactor| is 2 or 4, enlarged with Real-ESRGAN. Emits
+  // touchUpProgress() while upscaling, then saved() or failed().
+  //
+  // With |replaceOriginal| the result takes the original's place instead:
+  // it is written as a copy first, then the original goes to the Trash (so
+  // it can always be restored) and the copy is renamed to its name. saved()
+  // then carries the original's path.
+  Q_INVOKABLE void saveTouchUp(const QString& path, int steps, int upscaleFactor = 0,
+                               int jobId = 0, bool replaceOriginal = false);
+  // The picture turned and flipped (no crop or resize) in the original's
+  // place, the same way: losslessly for a plain JPEG, original to the Trash.
+  Q_INVOKABLE void replaceWithTurn(const QString& path, int quarterTurns, bool flipHorizontal,
+                                   bool flipVertical, int jobId = 0);
+  // Runs the touch-ups and AI Uprez now, so the result can be looked at
+  // before it is saved. Emits touchUpProgress() while the tool runs, then
+  // upscaleReady() with a file:// URL of the result (a private temporary PNG)
+  // or failed(). The next saveTouchUp() for the same file, steps and factor
+  // writes that result instead of upscaling again.
+  Q_INVOKABLE void generateUpscale(const QString& path, int steps, int factor, int jobId = 0);
+  // Stops a running generateUpscale() (nothing is emitted for it afterwards)
+  // and forgets the generated result.
+  Q_INVOKABLE void discardUpscale();
+  // Whether a generated result for exactly this is waiting to be saved.
+  Q_INVOKABLE bool hasGeneratedUpscale(const QString& path, int steps, int factor) const;
+
+  // Whether |path| can be replaced by a corrected version in its own format:
+  // not a raw, not animated, and a format Qt can write back.
+  Q_INVOKABLE bool canReplace(const QString& path) const;
+  // Whether the Real-ESRGAN command is installed; checked each call, so
+  // installing it while Omaroll runs is picked up.
+  Q_INVOKABLE bool upscalerAvailable() const;
+  Q_INVOKABLE QString upscalerPackage() const;
+
   // Copies the selected region (same pipeline, no resize) to the clipboard.
   // Emits copied() or failed(). Nothing is written to disk.
   Q_INVOKABLE void copyRegion(const QString& path, int quarterTurns, bool flipHorizontal,
@@ -114,9 +156,30 @@ signals:
   void failed(const QString& message, int jobId);
   void busyChanged();
   void batchProgress(int done, int total, int jobId);
+  void touchUpProgress(qreal fraction, int jobId);
+  void upscaleReady(const QString& previewUrl, const QSize& size, int jobId);
+  // A save over the original failed after its copy was written; the copy
+  // stays beside the original. failed() follows with why.
+  void copyKept(const QString& outputPath, int jobId);
   void batchFinished(int succeeded, int failed, const QVariantList& results, int jobId);
 
 private:
+  // An upscaled result generated ahead of saving. The folder is shared with
+  // any save reading it, so discarding never pulls the file from under one.
+  struct Generated {
+    QString source;
+    QDateTime sourceModified;
+    qint64 sourceBytes = -1;
+    int steps = 0;
+    int factor = 0;
+    std::shared_ptr<QTemporaryDir> folder;
+    QString file;
+    QColorSpace colorSpace;
+  };
+  [[nodiscard]] bool matchesGenerated(const QString& path, int steps, int factor) const;
+
+  Generated m_generated;
+  std::shared_ptr<std::atomic_bool> m_generateCancel;
   bool m_busy = false;
   int m_nextJobId = 0;
 };

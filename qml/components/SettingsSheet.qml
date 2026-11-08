@@ -487,6 +487,105 @@ Item {
             Row {
                 width: parent.width
                 spacing: 12
+                Column {
+                    width: parent.width - trashConfirmation.width - 12
+                    spacing: 2
+                    Text {
+                        text: "Confirm moving to Trash"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        color: Theme.foreground
+                    }
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "Ask before Delete moves a picture to Trash. Off moves it straight away; it can still be restored from Trash."
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.mutedText
+                    }
+                }
+                PillButton {
+                    id: trashConfirmation
+                    objectName: "trashConfirmation"
+                    accessibleName: "Confirm moving to Trash"
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: Settings.confirmTrash ? "On" : "Off"
+                    checkable: true
+                    active: Settings.confirmTrash
+                    onClicked: Settings.confirmTrash = !Settings.confirmTrash
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 12
+                Column {
+                    width: parent.width - folderDeleteConfirmation.width - 12
+                    spacing: 2
+                    Text {
+                        text: "Confirm deleting folders"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        color: Theme.foreground
+                    }
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "Ask before Delete permanently removes a folder from the sidebar menu. Off deletes it at once, and it cannot be undone."
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.mutedText
+                    }
+                }
+                PillButton {
+                    id: folderDeleteConfirmation
+                    objectName: "folderDeleteConfirmation"
+                    accessibleName: "Confirm deleting folders"
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: Settings.confirmFolderDelete ? "On" : "Off"
+                    checkable: true
+                    active: Settings.confirmFolderDelete
+                    onClicked: Settings.confirmFolderDelete = !Settings.confirmFolderDelete
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 12
+                Column {
+                    width: parent.width - replaceConfirmation.width - 12
+                    spacing: 2
+                    Text {
+                        text: "Confirm saving over a picture"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        color: Theme.foreground
+                    }
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "Ask before Save puts an edited picture in the original's place. The original still goes to Trash."
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.mutedText
+                    }
+                }
+                PillButton {
+                    id: replaceConfirmation
+                    objectName: "replaceConfirmation"
+                    accessibleName: "Confirm saving over a picture"
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: Settings.confirmReplace ? "On" : "Off"
+                    checkable: true
+                    active: Settings.confirmReplace
+                    onClicked: Settings.confirmReplace = !Settings.confirmReplace
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 12
                 Text {
                     width: parent.width - enlargeButton.width - 12
                     anchors.verticalCenter: parent.verticalCenter
