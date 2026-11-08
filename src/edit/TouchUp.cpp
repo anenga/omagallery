@@ -39,6 +39,22 @@ constexpr int kBackingTolerance = 40;
 constexpr int kShadowStep = 64;
 // Lines that are not border, in a row, before a side's border is over.
 constexpr int kMissedLines = 2;
+// A shadow seam is a few lines wide. A longer dark run inside the light
+// strip is the picture (a night shot, a dark room), so the border ends where
+// the run began. Only the scanner's own margin, outside everything, is
+// allowed to be wider, and that is perfectly even.
+constexpr int kDarkGrey = 64;
+constexpr double kMaxDarkShare = 0.006;
+constexpr int kMinDarkRun = 3;
+constexpr double kMarginEvenness = 0.97;
+// A slanted print leaves a wedge of backing along an edge: the outermost
+// lines are backing over part of their length, from one end. A run from an
+// end over this share of the line counts, for up to this share of the side
+// past the solid border.
+constexpr double kWedgeShare = 0.1;
+constexpr double kWedgeDepth = 0.02;
+constexpr int kWedgeGrey = 150;
+constexpr int kWedgeChroma = 30;
 
 struct LineClass {
   // Border by colour alone: neutral backing, light strip or shadow seam.
@@ -96,6 +112,26 @@ LineClass classify(const std::vector<QRgb>& pixels) {
   return {seam, false, nearShare, centre};
 }
 
+// Whether a run of backing-coloured pixels from either end of the line
+// covers kWedgeShare of it.
+bool wedge(const std::vector<QRgb>& pixels, std::optional<QRgb> backing) {
+  const auto isBacking = [backing](QRgb p) {
+    if (backing) return close(p, *backing, kBackingTolerance);
+    const int spread = std::max({qRed(p), qGreen(p), qBlue(p)}) - std::min({qRed(p), qGreen(p), qBlue(p)});
+    return qGray(p) >= kWedgeGrey && spread <= kWedgeChroma;
+  };
+  const size_t need = static_cast<size_t>(std::ceil(kWedgeShare * static_cast<double>(pixels.size())));
+  if (need == 0 || need > pixels.size()) return false;
+  const auto from = [&](auto begin, auto end) {
+    size_t run = 0;
+    for (auto it = begin; it != end && isBacking(*it); ++it) {
+      if (++run >= need) return true;
+    }
+    return false;
+  };
+  return from(pixels.cbegin(), pixels.cend()) || from(pixels.crbegin(), pixels.crend());
+}
+
 int weakestChannel(QRgb colour) {
   const int r = qRed(colour);
   const int g = qGreen(colour);
@@ -112,8 +148,17 @@ int weakestChannel(QRgb colour) {
 template <typename LineAt>
 int peel(int lineCount, LineAt lineAt, std::optional<QRgb> backing) {
   const int limit = static_cast<int>(lineCount * kMaxSideShare);
+  const int wedgeDepth = std::max(1, static_cast<int>(std::lround(lineCount * kWedgeDepth)));
+  const int maxDark = std::max(kMinDarkRun, static_cast<int>(std::lround(lineCount * kMaxDarkShare)));
   std::vector<QRgb> pixels;
   int peeled = 0;
+  // The dark run being peeled: where it began, and whether it is the
+  // scanner's margin (it began at the outermost line and stays even).
+  int darkStart = -1;
+  bool margin = false;
+  // Every line so far was border, so a wedge can still carry on.
+  bool unbroken = true;
+  int wedges = 0;
   // A stray line that is not border (a speck of dust, a corner of the print
   // lifting into the first line) does not end the border, but a few do.
   int misses = 0;
@@ -130,9 +175,27 @@ int peel(int lineCount, LineAt lineAt, std::optional<QRgb> backing) {
                     (previous && line.evenness >= kSeamUniformShare &&
                      weakestChannel(line.median) == weakestChannel(*backing) &&
                      close(line.median, *previous, kShadowStep)));
-    if (!line.border && !tinted) {
+    const bool backingWedge =
+        !line.border && !tinted && unbroken && wedges < wedgeDepth && wedge(pixels, backing);
+    if (backingWedge) ++wedges;
+    if (!line.border && !tinted && !backingWedge) {
+      unbroken = false;
+      darkStart = -1;
       if (++misses > kMissedLines) break;
       continue;
+    }
+    if (qGray(line.median) < kDarkGrey && !backingWedge) {
+      if (darkStart < 0) {
+        darkStart = i;
+        margin = i == 0;
+      }
+      margin = margin && line.evenness >= kMarginEvenness;
+      if (!margin && i - darkStart + 1 > maxDark) {
+        // Too wide for a seam: the picture is dark here.
+        return std::min(peeled, darkStart);
+      }
+    } else {
+      darkStart = -1;
     }
     misses = 0;
     previous = line.median;

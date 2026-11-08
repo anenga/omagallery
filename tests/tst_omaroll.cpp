@@ -9046,6 +9046,59 @@ private slots:
     }
   }
 
+  void touchUpSmartCropStopsAtADarkPicture() {
+    // A night shot: the print's sides are nearly black, low in colour and
+    // even, like a border, but far wider than any shadow seam.
+    QImage photo = touchUpPhoto(600, 400);
+    for (int y = 0; y < photo.height(); ++y) {
+      for (int x = 0; x < photo.width(); ++x) {
+        if (x < 210 || x >= 480) {
+          const int v = 6 + (x * 7 + y * 13) % 9;
+          photo.setPixel(x, y, qRgb(v, v, v + 2));
+        }
+      }
+    }
+    QImage scan(640, 440, QImage::Format_RGB32);
+    scan.fill(qRgb(236, 236, 238));
+    {
+      QPainter painter(&scan);
+      painter.fillRect(QRect(18, 18, 604, 404), QColor(52, 52, 54));
+      painter.drawImage(20, 20, photo);
+    }
+    const QRectF area = TouchUp::detectBorder(scan);
+    const QRect found(qRound(area.x() * scan.width()), qRound(area.y() * scan.height()),
+                      qRound(area.width() * scan.width()), qRound(area.height() * scan.height()));
+    const QString shown = QStringLiteral("%1,%2 %3x%4").arg(found.x()).arg(found.y())
+                              .arg(found.width()).arg(found.height());
+    // The backing and seam go; the dark picture stays, give or take the pad.
+    QVERIFY2(QRect(20, 20, 600, 400).contains(found), qPrintable(shown));
+    QVERIFY2(found.width() >= 588 && found.height() >= 388, qPrintable(shown));
+  }
+
+  void touchUpSmartCropTakesAWedgeOfBacking() {
+    // A print fed askew leaves a sliver of backing along one edge, the full
+    // strip at one end thinning to nothing partway along.
+    const QImage photo = touchUpPhoto(600, 400);
+    QImage scan(640, 440, QImage::Format_RGB32);
+    scan.fill(qRgb(236, 236, 238));
+    {
+      QPainter painter(&scan);
+      painter.drawImage(20, 20, photo);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(QColor(236, 236, 238));
+      painter.drawPolygon(QPolygon({QPoint(300, 20), QPoint(620, 20), QPoint(620, 30)}));
+    }
+    // The wedge's ten lines go too, but not much more.
+    const QImage cropped = TouchUp::apply(scan, TouchUp::SmartCrop);
+    QVERIFY2(cropped.width() >= 588 && cropped.height() >= 380,
+             qPrintable(QStringLiteral("%1x%2").arg(cropped.width()).arg(cropped.height())));
+    int bright = 0;
+    for (int x = 0; x < cropped.width(); ++x) {
+      if (qGray(cropped.pixel(x, 0)) >= 230) ++bright;
+    }
+    QVERIFY2(bright < cropped.width() / 20, qPrintable(QString::number(bright)));
+  }
+
   void touchUpSmartCropTakesATintedBacking() {
     // Some scans come back on a tinted (here cyan) backing, with a deeper
     // teal shadow fading along one edge of the print.
