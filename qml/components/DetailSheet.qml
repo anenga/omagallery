@@ -196,6 +196,11 @@ Item {
     // beside the slideshow group. Labels shrink to icons when the row at its
     // long labels would not fit; the widths come from hidden copies drawn in
     // the theme font, so the decision follows the font rather than a guess.
+    // The save pills join the image row only where the row still fits with
+    // them; at a narrow stage they would push its first controls off screen.
+    readonly property bool roomToSaveView: stage.width >= stage.rowChrome + 12
+        + wideTopMeasure.implicitWidth + saveViewMeasure.implicitWidth
+        + (root.compactControls ? compactImageMeasure.implicitWidth : wideImageMeasure.implicitWidth)
     readonly property bool compactControls: root.fullScreen
         || stage.width < stage.rowChrome + wideTopMeasure.implicitWidth
            + (root.isVideo && !root.slideshowRunning ? transport.minimumWidth
@@ -1043,6 +1048,16 @@ Item {
                     PillButton { label: modelData }
                 }
                 Item { width: 42; height: 1 }
+            }
+            // Saving a turn or flip adds these to the image row.
+            Row {
+                id: saveViewMeasure
+                visible: false
+                spacing: 6
+                Repeater {
+                    model: ["Save copy", "Save"]
+                    PillButton { label: modelData }
+                }
             }
             Row {
                 id: compactImageMeasure
@@ -2139,7 +2154,7 @@ Item {
                 }
                 PillButton {
                     objectName: "saveViewTransformButton"
-                    visible: root.viewTransformed && !root.isDocument && !root.isVideo
+                    visible: root.viewTransformed && !root.isDocument && !root.isVideo && root.roomToSaveView
                              && Registry.appliesToKind("corrections", false, false, root.path)
                     label: root.rotationSaveJob >= 0 && !root.rotationReplacing ? "Saving…" : "Save copy"
                     toolTip: "Save the rotated picture as a copy"
@@ -2148,7 +2163,7 @@ Item {
                 }
                 PillButton {
                     objectName: "replaceViewTransformButton"
-                    visible: root.viewTransformed && !root.isDocument && !root.isVideo
+                    visible: root.viewTransformed && !root.isDocument && !root.isVideo && root.roomToSaveView
                              && ImageEdit.canReplace(root.path)
                     label: root.rotationSaveJob >= 0 && root.rotationReplacing ? "Saving…" : "Save"
                     toolTip: "Save over the original; the original goes to the Trash"
