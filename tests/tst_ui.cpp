@@ -5512,7 +5512,7 @@ private slots:
   // A small tiled window with large tiles cuts the visible rows off at the
   // bottom. Double-clicking a partly visible tile must open that tile, not
   // whatever the view scrolled under the pointer after the first click.
-  void galleryViewKeepsTheCurrentPictureAndJustifiesRows() {
+  void galleryViewShowsWholePicturesAndKeepsTheCurrentOne() {
     QQuickItem* grid = item("library");
     QQuickItem* gallery = item("gallery");
     QVERIFY(grid);
@@ -5527,24 +5527,29 @@ private slots:
 
     m_settings->setGalleryView(true);
     QTRY_VERIFY_WITH_TIMEOUT(gallery->isVisible() &&
-                                 gallery->property("rows").toList().size() > 0,
+                                 gallery->property("layout").toMap().value(
+                                     QStringLiteral("ys")).toList().size() == m_library->rowCount(),
                              5000);
-    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
+    QCOMPARE(grid->property("currentIndex").toInt(), 3);
     QCOMPARE(grid->property("count").toInt(), m_library->rowCount());
-    // Every justified row meets the right edge; rows cover every picture once.
-    const QVariantList rows = gallery->property("rows").toList();
-    int covered = 0;
-    for (const QVariant& value : rows) {
-      const QVariantMap row = value.toMap();
-      QCOMPARE(row.value(QStringLiteral("start")).toInt(), covered);
-      covered += row.value(QStringLiteral("count")).toInt();
-      if (!row.value(QStringLiteral("justified")).toBool()) continue;
-      double used = 4.0 * (row.value(QStringLiteral("count")).toInt() - 1);
-      for (const QVariant& ratio : row.value(QStringLiteral("ratios")).toList())
-        used += ratio.toDouble() * row.value(QStringLiteral("height")).toDouble();
-      QVERIFY(qAbs(used - gallery->width()) < 1.0);
-    }
-    QCOMPARE(covered, m_library->rowCount());
+
+    // Every tile on screen is drawn with the whole picture inside it, at the
+    // picture's own shape once its thumbnail is in.
+    const auto wholeTiles = [&]() {
+      int shown = 0;
+      std::function<void(QQuickItem*)> walk = [&](QQuickItem* node) {
+        for (QQuickItem* child : node->childItems()) {
+          if (child->objectName() == QStringLiteral("captureThumbnail") && child->isVisible()) {
+            if (child->property("fillMode").toInt() != 1) return; // PreserveAspectFit
+            ++shown;
+          }
+          walk(child);
+        }
+      };
+      walk(gallery);
+      return shown;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(wholeTiles() > 0, 5000);
 
     // Right steps to the next picture, as in the card grid.
     gallery->forceActiveFocus();
@@ -5553,12 +5558,39 @@ private slots:
     QTest::keyClick(m_window, Qt::Key_Left);
     QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
 
+    // Delete asks to trash the picture under the pointer, not the current one.
+    QQuickItem* hovered = nullptr;
+    const qreal top = gallery->property("contentY").toReal();
+    for (QQuickItem* child : gallery->property("contentItem").value<QQuickItem*>()->childItems()) {
+      const QString path = child->property("path").toString();
+      if (child->property("gallery").toBool() && child->isVisible() && !path.isEmpty() &&
+          path != current && child->y() >= top &&
+          child->y() + child->height() <= top + gallery->height()) {
+        hovered = child;
+        break;
+      }
+    }
+    QVERIFY(hovered);
+    const QString hoveredPath = hovered->property("path").toString();
+    QTest::mouseMove(m_window, hovered->mapToScene(QPointF(hovered->width() / 2,
+                                                           hovered->height() / 2)).toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("hoveredPath").toString(), hoveredPath, 2000);
+    QTest::keyClick(m_window, Qt::Key_Delete);
+    QQuickItem* confirm = item("confirm");
+    QTRY_VERIFY(confirm->isVisible());
+    QCOMPARE(confirm->property("detail").toString(), hoveredPath);
+    QTest::keyClick(m_window, Qt::Key_Escape);
+    QTRY_VERIFY(!confirm->isVisible());
+    QVERIFY(QFileInfo::exists(hoveredPath));
+    QTest::mouseMove(m_window, QPoint(1, 1));
+    gallery->forceActiveFocus();
+
     // G switches back, still on the same picture.
     QTest::keyClick(m_window, Qt::Key_G);
     QTRY_VERIFY_WITH_TIMEOUT(!m_settings->galleryView(), 2000);
     QTRY_VERIFY_WITH_TIMEOUT(!gallery->isVisible(), 2000);
-    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
-    QCOMPARE(grid->property("selectedPath").toString(), current);
+    QCOMPARE(grid->property("currentIndex").toInt(), 3);
+    QCOMPARE(pathAt(grid->property("currentIndex").toInt()), current);
   }
 
   void doubleClickOnAPartlyVisibleTileOpensThatTile() {

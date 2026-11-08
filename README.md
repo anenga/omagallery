@@ -175,9 +175,10 @@ until the viewer closes; subtitle delay resets when the file changes.
   date, camera or lens, and resize the grid. Original photo and video dates are
   used when available. Add folders without importing or copying their files.
 - **Switch to a photo gallery.** Press `G` or the Gallery button to lay the
-  library out in justified rows that keep every picture's own shape, with a
-  header over each day. Time and size appear on hover. Press `G` again for the
-  card grid.
+  library out in masonry columns that show every picture whole, never
+  cropped, with a header over each day. Hovering lifts a picture and shows its
+  time and size; `Delete` trashes the one under the pointer, after the usual
+  prompt. Press `G` again for the card grid.
 - **Organize without changing originals.** Albums, nested tags, captions,
   favourites, ratings and saved searches live in Omaroll's settings. Undo marks
   with Ctrl+Z, and back up or restore your organization from Settings.

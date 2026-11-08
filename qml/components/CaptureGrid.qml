@@ -12,8 +12,8 @@ FocusScope {
     property var model: null
     property alias currentIndex: grid.currentIndex
     property alias count: grid.count
-    // Cards is the uniform grid below; gallery is JustifiedGallery, rows that
-    // keep each picture's shape. The grid stays attached to the model in both
+    // Cards is the uniform grid below; gallery is MasonryGallery, columns that
+    // show every picture whole. The grid stays attached to the model in both
     // so its current index, selection and relayout handling stay the single
     // source of truth; in gallery mode it is hidden and shrunk to nothing.
     readonly property bool gallery: Settings.galleryView
@@ -33,6 +33,8 @@ FocusScope {
 
     signal chosen(int index)
     signal deleteRequested(string path)
+    // The gallery tile under the pointer, for Delete.
+    property string hoveredPath: ""
     signal detailRequested(int index)
     signal contextRequested(int index, real x, real y)
     // Tab and Shift+Tab walk the sections. Handled here as key events rather
@@ -50,6 +52,7 @@ FocusScope {
             grid.positionViewAtIndex(grid.currentIndex, GridView.Contain)
         }
         root.updateDay()
+        scrollbar.follow()
     })
 
     // Shared by both views' tiles.
@@ -244,10 +247,8 @@ FocusScope {
 
     function updateDay() {
         if (gallery) {
-            const rowIndex = galleryView.indexAt(4, galleryView.contentY + 4)
-            const rows = galleryView.rows
-            const first = rowIndex >= 0 && rowIndex < rows.length ? rows[rowIndex].start
-                          : (grid.count > 0 ? 0 : -1)
+            const top = galleryView.itemAtTop()
+            const first = top >= 0 ? top : (grid.count > 0 ? 0 : -1)
             root.currentDayLabel = first >= 0 ? Captures.gridLabelAt(first) : ""
             return
         }
@@ -403,7 +404,7 @@ FocusScope {
         Keys.onPressed: function (event) { root.handleKey(event) }
     }
 
-    JustifiedGallery {
+    MasonryGallery {
         id: galleryView
         objectName: "gallery"
         owner: root
@@ -430,12 +431,12 @@ FocusScope {
                 galleryView.stepRow(1); event.accepted = true; return
             case Qt.Key_Home:
                 grid.currentIndex = 0
-                galleryView.positionViewAtBeginning()
+                galleryView.contentY = 0
                 event.accepted = true
                 return
             case Qt.Key_End:
                 grid.currentIndex = grid.count - 1
-                galleryView.positionViewAtEnd()
+                galleryView.contentY = Math.max(0, galleryView.contentHeight - galleryView.height)
                 event.accepted = true
                 return
             }
@@ -463,7 +464,12 @@ FocusScope {
                     event.accepted = true
                     break
                 }
-                if (grid.currentIndex >= 0) {
+                // In the gallery, Delete takes the picture under the pointer
+                // first, then the current one.
+                if (root.gallery && root.hoveredPath !== "") {
+                    root.deleteRequested(root.hoveredPath)
+                    event.accepted = true
+                } else if (grid.currentIndex >= 0) {
                     root.deleteRequested(Captures.pathAt(grid.currentIndex))
                     event.accepted = true
                 }
@@ -526,8 +532,23 @@ FocusScope {
         anchors.bottom: parent.bottom
         width: root.scrollbarWidth
 
-        size: root.flick.height / Math.max(root.flick.contentHeight, 1)
-        position: root.flick.visibleArea.yPosition
+        size: Math.min(1, root.flick.height / Math.max(root.flick.contentHeight, 1))
+        // Driven from the view rather than bound to it. A binding to
+        // visibleArea re-entered whenever the content height changed under
+        // it, which the gallery does as picture shapes arrive.
+        function follow() {
+            if (pressed) return
+            const target = Math.max(0, Math.min(1 - size, root.flick.visibleArea.yPosition))
+            if (Math.abs(position - target) > 1e-6) position = target
+        }
+        Connections {
+            target: root.flick
+            function onContentYChanged() { scrollbar.follow() }
+            function onContentHeightChanged() { Qt.callLater(scrollbar.follow) }
+            function onHeightChanged() { Qt.callLater(scrollbar.follow) }
+        }
+        onSizeChanged: Qt.callLater(follow)
+        Component.onCompleted: follow()
         onPositionChanged: {
             if (pressed) {
                 root.flick.contentY = position * root.flick.contentHeight

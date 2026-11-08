@@ -31,6 +31,7 @@ Item {
     // Gallery tiles drop the card frame and keep the picture edge to edge;
     // time and size appear on hover, like a photos app.
     property bool gallery: false
+    readonly property bool hovered: hover.hovered
     readonly property bool stripShown: !gallery || hover.hovered || keyboardCurrent
                                        || Settings.showGridFilenames
                                        || ocrSnippet !== ""
@@ -73,6 +74,8 @@ Item {
     signal chosen()
     signal contextRequested(real x, real y)
     signal toggleChecked()
+    // Gallery only: the width over height of the thumbnail that arrived.
+    signal shapeSeen(real ratio)
 
     function shade(base, amount) {
         return Qt.rgba(base.r, base.g, base.b, amount)
@@ -176,9 +179,12 @@ Item {
 
         Image {
             id: thumbnail
+            objectName: "captureThumbnail"
             anchors.fill: parent
             anchors.margins: root.gallery ? 0 : 1
-            fillMode: Image.PreserveAspectCrop
+            // The gallery shows the whole picture, always: if a tile's shape
+            // is still a guess, the picture is letterboxed, never cut.
+            fillMode: root.gallery ? Image.PreserveAspectFit : Image.PreserveAspectCrop
             asynchronous: true
             cache: true
             retainWhileLoading: true
@@ -213,6 +219,9 @@ Item {
                     root.readyPath = root.path
                     root.readyIdentity = root.thumbnailIdentity
                     root.thumbnailReady = true
+                    if (root.gallery && implicitWidth > 0 && implicitHeight > 0) {
+                        root.shapeSeen(implicitWidth / implicitHeight)
+                    }
                 }
             }
 
@@ -450,6 +459,19 @@ Item {
         // Keep the current/checked outline above the thumbnail and metadata
         // strip. A Rectangle's own border is painted below its children, which
         // let the bottom strip cover the lower edge of the selection.
+        // A gallery tile has no resting border, so hover lifts it with a soft
+        // wash and a faint accent edge instead.
+        Rectangle {
+            anchors.fill: parent
+            z: 19
+            visible: root.gallery
+            radius: frame.radius
+            color: root.shade(Theme.foreground, hover.hovered ? 0.07 : 0)
+            border.width: hover.hovered && !root.selected && !root.checked ? 1 : 0
+            border.color: root.shade(Theme.accent, 0.55)
+            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+        }
+
         Rectangle {
             anchors.fill: parent
             z: 20

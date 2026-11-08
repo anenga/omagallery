@@ -211,6 +211,7 @@ public:
         // Demo and render order is deliberately fixed. Real libraries are
         // enriched in the background after their fast filesystem scan lands.
         m_mediaMetadata(demo ? nullptr : &m_captures),
+        m_aspects(nullptr, !demo),
         m_textIndex(&m_captures),
         m_qr(&m_captures),
         m_duplicates(&m_captures),
@@ -248,6 +249,25 @@ public:
                      [this, &settings] { settings.setKindFilter(m_library.kindFilter()); });
     QObject::connect(&m_library, &CaptureFilterModel::showHiddenChanged, &settings,
                      [this, &settings] { settings.setShowHidden(m_library.showHidden()); });
+
+    // The folder on screen is read first, so its dates settle while the
+    // rest of the library waits its turn in the background.
+    m_priorityTimer.setSingleShot(true);
+    m_priorityTimer.setInterval(250);
+    QObject::connect(&m_priorityTimer, &QTimer::timeout, &m_mediaMetadata, [this] {
+      QSet<QString> paths;
+      const int rows = m_library.rowCount();
+      if (rows < m_captures.rowCount()) {
+        paths.reserve(rows);
+        for (int row = 0; row < rows; ++row) paths.insert(m_library.pathAt(row));
+      }
+      m_mediaMetadata.prioritize(paths);
+    });
+    const auto viewChanged = [this] { m_priorityTimer.start(); };
+    QObject::connect(&m_library, &QAbstractItemModel::modelReset, &m_priorityTimer, viewChanged);
+    QObject::connect(&m_library, &QAbstractItemModel::layoutChanged, &m_priorityTimer, viewChanged);
+    QObject::connect(&m_library, &QAbstractItemModel::rowsInserted, &m_priorityTimer, viewChanged);
+    QObject::connect(&m_library, &QAbstractItemModel::rowsRemoved, &m_priorityTimer, viewChanged);
 
     m_folderTree.bind(&m_captures, &m_library);
     add(request);
@@ -326,6 +346,7 @@ private:
 
   CaptureModel m_captures;
   MediaMetadataIndex m_mediaMetadata;
+  QTimer m_priorityTimer;
   AspectIndex m_aspects;
   CaptureFilterModel m_library;
   FolderTreeModel m_folderTree;

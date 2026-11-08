@@ -888,8 +888,9 @@ QString CaptureFilterModel::ocrSnippetAt(int row) const {
   return data(index(row, 0), CaptureRoles::OcrSnippetRole).toString();
 }
 
-QVariantList CaptureFilterModel::galleryRows(double width, double targetHeight, double spacing,
-                                             bool grouped) {
+QVariantMap CaptureFilterModel::galleryLayout(double width, double targetColumnWidth,
+                                              double spacing, double headerHeight,
+                                              bool grouped) {
   const int rows = rowCount();
   QList<double> ratios;
   ratios.reserve(rows);
@@ -911,24 +912,35 @@ QVariantList CaptureFilterModel::galleryRows(double width, double targetHeight, 
       labels.append(gridLabelAt(row));
     }
   }
-  QVariantList out;
-  const QList<GalleryLayout::Row> packed =
-      GalleryLayout::pack(ratios, labels, width, targetHeight, spacing);
-  out.reserve(packed.size());
-  for (const GalleryLayout::Row& row : packed) {
-    QVariantList rowRatios;
-    rowRatios.reserve(row.ratios.size());
-    for (double ratio : row.ratios) {
-      rowRatios.append(ratio);
-    }
-    out.append(QVariantMap{{QStringLiteral("start"), row.start},
-                           {QStringLiteral("count"), row.count},
-                           {QStringLiteral("height"), row.height},
-                           {QStringLiteral("label"), row.label},
-                           {QStringLiteral("justified"), row.justified},
-                           {QStringLiteral("ratios"), rowRatios}});
+  const GalleryLayout::Masonry laid = GalleryLayout::masonry(ratios, labels, width,
+                                                             targetColumnWidth, spacing,
+                                                             headerHeight);
+  QVariantList xs;
+  QVariantList ys;
+  QVariantList hs;
+  xs.reserve(laid.rects.size());
+  ys.reserve(laid.rects.size());
+  hs.reserve(laid.rects.size());
+  for (const QRectF& rect : laid.rects) {
+    xs.append(rect.x());
+    ys.append(rect.y());
+    hs.append(rect.height());
   }
-  return out;
+  QVariantList headerYs;
+  QStringList headerLabels;
+  for (const GalleryLayout::Header& header : laid.headers) {
+    headerYs.append(header.y);
+    headerLabels.append(header.label);
+  }
+  return {{QStringLiteral("columns"), laid.columns},
+          {QStringLiteral("columnWidth"), laid.columnWidth},
+          {QStringLiteral("height"), laid.height},
+          {QStringLiteral("tallest"), laid.tallest},
+          {QStringLiteral("xs"), xs},
+          {QStringLiteral("ys"), ys},
+          {QStringLiteral("hs"), hs},
+          {QStringLiteral("headerYs"), headerYs},
+          {QStringLiteral("headerLabels"), headerLabels}};
 }
 
 QVariantMap CaptureFilterModel::rowData(int row) const {

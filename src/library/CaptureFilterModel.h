@@ -179,12 +179,13 @@ public:
   // cache can deliver many entries in one event-loop turn.
   void setOcrText(const QString& path, const QString& text);
 
-  // The gallery view. Rows are packed from each item's shape; with grouped
-  // set, each day (or match set) starts its own row and carries a label.
-  // Each row is {start, count, height, label, ratios}.
+  // The gallery view: masonry columns from each item's shape. With grouped
+  // set, each day (or match set) starts below the last under a header.
+  // Returns {columns, columnWidth, height, tallest, xs, ys, hs,
+  // headerYs, headerLabels}, with one entry per row in xs, ys and hs.
   void setAspectIndex(AspectIndex* aspects) { m_aspects = aspects; }
-  Q_INVOKABLE QVariantList galleryRows(double width, double targetHeight, double spacing,
-                                       bool grouped);
+  Q_INVOKABLE QVariantMap galleryLayout(double width, double targetColumnWidth, double spacing,
+                                        double headerHeight, bool grouped);
   // Every role of one row, for gallery tiles that are not view delegates.
   Q_INVOKABLE QVariantMap rowData(int row) const;
 

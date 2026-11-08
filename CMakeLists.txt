@@ -161,7 +161,7 @@ set(OMAROLL_QML_FILES
   qml/components/ActionMenu.qml
   qml/components/CaptureCard.qml
   qml/components/CaptureGrid.qml
-  qml/components/JustifiedGallery.qml
+  qml/components/MasonryGallery.qml
   qml/components/DayHeader.qml
   qml/components/Chrome.qml
   qml/components/FilterBar.qml

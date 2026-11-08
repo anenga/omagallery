@@ -232,44 +232,52 @@ class OmarollTest : public QObject {
   Q_OBJECT
 
 private slots:
-  void galleryRowsFillTheWidth() {
-    // Four 3:2 pictures and a portrait at 1000px wide, 200px target.
-    const QList<double> ratios = {1.5, 1.5, 1.5, 0.75, 1.5, 1.5};
-    const QList<GalleryLayout::Row> rows = GalleryLayout::pack(ratios, {}, 1000, 200, 4);
-    QCOMPARE(rows.size(), 2);
-    QCOMPARE(rows.at(0).start, 0);
-    QCOMPARE(rows.at(0).count, 4);
-    QVERIFY(rows.at(0).justified);
-    // The justified row's pictures and gaps add up to the full width.
-    double used = 4 * 3;
-    for (double ratio : rows.at(0).ratios) used += ratio * rows.at(0).height;
-    QVERIFY(qAbs(used - 1000) < 0.01);
-    QVERIFY(rows.at(0).height <= 200);
-    // The last row keeps the target height instead of blowing up.
-    QCOMPARE(rows.at(1).start, 4);
-    QCOMPARE(rows.at(1).count, 2);
-    QVERIFY(!rows.at(1).justified);
-    QCOMPARE(rows.at(1).height, 200.0);
+  void galleryMasonryShowsEveryPictureWhole() {
+    // 1000px wide with 240px columns and 8px gaps: four columns.
+    const QList<double> ratios = {1.5, 0.5, 1.0, 2.0, 0.75, 1.5};
+    const GalleryLayout::Masonry laid =
+        GalleryLayout::masonry(ratios, {}, 1000, 240, 8, 40);
+    QCOMPARE(laid.columns, 4);
+    QCOMPARE(laid.rects.size(), ratios.size());
+    QVERIFY(laid.headers.isEmpty());
+    const double column = (1000 - 8 * 3) / 4.0;
+    QCOMPARE(laid.columnWidth, column);
+    double previousTop = -1;
+    for (int i = 0; i < ratios.size(); ++i) {
+      const QRectF rect = laid.rects.at(i);
+      // Each picture keeps its own shape, so nothing is cropped.
+      QCOMPARE(rect.width(), column);
+      QVERIFY(qAbs(rect.height() - std::round(column / ratios.at(i))) < 0.01);
+      QVERIFY(rect.right() <= 1000.01);
+      // Tops never decrease in model order; the view searches on that.
+      QVERIFY(rect.y() >= previousTop);
+      previousTop = rect.y();
+    }
+    // The fifth picture goes under the shortest of the first row, the 2:1.
+    QCOMPARE(laid.rects.at(4).x(), laid.rects.at(3).x());
+    QCOMPARE(laid.rects.at(4).y(), laid.rects.at(3).bottom() + 8);
   }
 
-  void galleryRowsBreakAtEachGroup() {
-    const QList<double> ratios = {1.5, 1.5, 1.5, 1.5, 1.5};
+  void galleryMasonryStartsEachGroupUnderItsHeader() {
+    const QList<double> ratios = {1.0, 0.5, 1.0, 1.0};
     const QStringList labels = {QStringLiteral("Today"), QStringLiteral("Today"),
-                                QStringLiteral("Yesterday"), QStringLiteral("Yesterday"),
-                                QStringLiteral("Yesterday")};
-    const QList<GalleryLayout::Row> rows = GalleryLayout::pack(ratios, labels, 5000, 200, 4);
-    QCOMPARE(rows.size(), 2);
-    QCOMPARE(rows.at(0).label, QStringLiteral("Today"));
-    QCOMPARE(rows.at(0).count, 2);
-    QCOMPARE(rows.at(1).label, QStringLiteral("Yesterday"));
-    QCOMPARE(rows.at(1).start, 2);
-    QCOMPARE(rows.at(1).count, 3);
-    // Extreme shapes are clamped so no picture takes a row alone or vanishes.
-    const QList<GalleryLayout::Row> wide = GalleryLayout::pack({20.0, 0.05}, {}, 1000, 200, 4);
-    QCOMPARE(wide.first().ratios.first(), GalleryLayout::kMaximumRatio);
-    QCOMPARE(wide.first().ratios.last(), GalleryLayout::kMinimumRatio);
-    QVERIFY(GalleryLayout::pack({}, {}, 1000, 200, 4).isEmpty());
-    QVERIFY(GalleryLayout::pack({1.5}, {}, 0, 200, 4).isEmpty());
+                                QStringLiteral("Yesterday"), QStringLiteral("Yesterday")};
+    const GalleryLayout::Masonry laid = GalleryLayout::masonry(ratios, labels, 400, 190, 10, 40);
+    QCOMPARE(laid.columns, 2);
+    QCOMPARE(laid.headers.size(), 2);
+    QCOMPARE(laid.headers.at(0).label, QStringLiteral("Today"));
+    QCOMPARE(laid.headers.at(0).y, 0.0);
+    QCOMPARE(laid.rects.at(0).y(), 40.0);
+    // The second group starts below the taller column of the first.
+    QVERIFY(laid.headers.at(1).y >= laid.rects.at(1).bottom());
+    QCOMPARE(laid.rects.at(2).y(), laid.headers.at(1).y + 40);
+    QCOMPARE(laid.rects.at(3).y(), laid.rects.at(2).y());
+    QVERIFY(laid.height >= laid.rects.at(3).bottom());
+    // Extreme shapes are bounded so a strip cannot swallow the screen.
+    const GalleryLayout::Masonry strip = GalleryLayout::masonry({0.01}, {}, 200, 200, 0, 0);
+    QCOMPARE(strip.rects.first().height(), std::round(200 / GalleryLayout::kMinimumRatio));
+    QVERIFY(GalleryLayout::masonry({}, {}, 1000, 200, 4, 0).rects.isEmpty());
+    QVERIFY(GalleryLayout::masonry({1.5}, {}, 0, 200, 4, 0).rects.isEmpty());
   }
 
   void aspectIndexReadsPictureShapes() {
@@ -290,6 +298,10 @@ private slots:
     QSignalSpy changed(&index, &AspectIndex::ratiosChanged);
     QVERIFY(changed.wait(5000));
     QCOMPARE(index.ratio(tall, 1, false, false), 0.5);
+    // A shape learned from a thumbnail covers what headers cannot.
+    index.learn(tall, 1, 0.8);
+    QCOMPARE(index.ratio(tall, 1, true, false), 0.8);
+    QCOMPARE(index.ratio(tall, 2, true, false), AspectIndex::kVideoRatio);
   }
 
   void playbackEnvironment_data() {
