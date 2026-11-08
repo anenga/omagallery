@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QColorSpace>
+#include <QDateTime>
 #include <QImage>
 #include <QObject>
 #include <QRect>
@@ -8,6 +10,11 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
+
+#include <atomic>
+#include <memory>
+
+class QTemporaryDir;
 
 // Quick, non-destructive image corrections.
 //
@@ -94,6 +101,18 @@ public:
   // place, the same way: losslessly for a plain JPEG, original to the Trash.
   Q_INVOKABLE void replaceWithTurn(const QString& path, int quarterTurns, bool flipHorizontal,
                                    bool flipVertical, int jobId = 0);
+  // Runs the touch-ups and AI Uprez now, so the result can be looked at
+  // before it is saved. Emits touchUpProgress() while the tool runs, then
+  // upscaleReady() with a file:// URL of the result (a private temporary PNG)
+  // or failed(). The next saveTouchUp() for the same file, steps and factor
+  // writes that result instead of upscaling again.
+  Q_INVOKABLE void generateUpscale(const QString& path, int steps, int factor, int jobId = 0);
+  // Stops a running generateUpscale() (nothing is emitted for it afterwards)
+  // and forgets the generated result.
+  Q_INVOKABLE void discardUpscale();
+  // Whether a generated result for exactly this is waiting to be saved.
+  Q_INVOKABLE bool hasGeneratedUpscale(const QString& path, int steps, int factor) const;
+
   // Whether |path| can be replaced by a corrected version in its own format:
   // not a raw, not animated, and a format Qt can write back.
   Q_INVOKABLE bool canReplace(const QString& path) const;
@@ -138,9 +157,26 @@ signals:
   void busyChanged();
   void batchProgress(int done, int total, int jobId);
   void touchUpProgress(qreal fraction, int jobId);
+  void upscaleReady(const QString& previewUrl, const QSize& size, int jobId);
   void batchFinished(int succeeded, int failed, const QVariantList& results, int jobId);
 
 private:
+  // An upscaled result generated ahead of saving. The folder is shared with
+  // any save reading it, so discarding never pulls the file from under one.
+  struct Generated {
+    QString source;
+    QDateTime sourceModified;
+    qint64 sourceBytes = -1;
+    int steps = 0;
+    int factor = 0;
+    std::shared_ptr<QTemporaryDir> folder;
+    QString file;
+    QColorSpace colorSpace;
+  };
+  [[nodiscard]] bool matchesGenerated(const QString& path, int steps, int factor) const;
+
+  Generated m_generated;
+  std::shared_ptr<std::atomic_bool> m_generateCancel;
   bool m_busy = false;
   int m_nextJobId = 0;
 };

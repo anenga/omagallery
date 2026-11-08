@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QString>
 
+#include <atomic>
 #include <functional>
 
 // AI upscaling through Real-ESRGAN, run locally on the GPU.
@@ -30,9 +31,13 @@ inline constexpr const char* kModel = "realesrgan-x4plus";
 
 // |image| enlarged |factor| times (2 or 4), never past |maxPixels|. Blocks
 // until the tool finishes; call it off the GUI thread. |progress| receives
-// 0..1 as the tool reports it. On failure returns a null image and sets
-// |error|.
+// 0..1 as the tool reports it. Setting |*cancel| stops the tool within a
+// quarter second. On failure returns a null image and sets |error|.
 [[nodiscard]] QImage upscale(const QImage& image, int factor, qint64 maxPixels, QString* error,
-                             const std::function<void(qreal)>& progress = {});
+                             const std::function<void(qreal)>& progress = {},
+                             const std::atomic_bool* cancel = nullptr);
+
+// The message upscale() fails with when |cancel| stopped it.
+[[nodiscard]] QString stoppedMessage();
 
 } // namespace Upscaler

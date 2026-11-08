@@ -145,8 +145,8 @@ Rectangle {
         IconButton {
             objectName: "viewerReplaceRotation"
             visible: root.rotated && root.canReplace
-            label: root.savingRotation && root.replacingRotation ? "Replacing…" : "Replace"
-            toolTip: "Replace the original with the rotated picture; the original goes to the Trash"
+            label: root.savingRotation && root.replacingRotation ? "Saving…" : "Save"
+            toolTip: "Save over the original; the original goes to the Trash"
             onClicked: root.replaceRotation()
         }
         Divider {}

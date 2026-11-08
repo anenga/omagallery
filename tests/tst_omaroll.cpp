@@ -22,6 +22,7 @@
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
 #include "edit/ImageEditor.h"
+#include "edit/Upscaler.h"
 #include "edit/TouchUp.h"
 #include "edit/ClipboardImage.h"
 #include "edit/ClipboardText.h"
@@ -9104,6 +9105,71 @@ private slots:
     const int cast = qRed(light) - qBlue(light);
     QVERIFY2(cast >= 0 && cast < 35, qPrintable(QString::number(cast)));
     QVERIFY(TouchUp::autoFix(QImage()).isNull());
+  }
+
+  void touchUpGeneratedUprezIsSavedWithoutRunningAgain() {
+    // A stand-in for Real-ESRGAN that hands the picture back unchanged;
+    // Omaroll scales it to the factor asked for.
+    QTemporaryDir work;
+    QVERIFY(work.isValid());
+    const QString bin = work.filePath(QStringLiteral("bin"));
+    QVERIFY(QDir().mkpath(bin));
+    const QString tool = bin + QLatin1Char('/') + QString::fromLatin1(Upscaler::kProgram);
+    {
+      QFile script(tool);
+      QVERIFY(script.open(QIODevice::WriteOnly));
+      script.write("#!/bin/sh\n"
+                   "while [ $# -gt 0 ]; do case $1 in -i) i=$2; shift;; -o) o=$2; shift;; esac; shift; done\n"
+                   "echo '50.00%' >&2\n"
+                   "cp \"$i\" \"$o\"\n");
+    }
+    QVERIFY(QFile::setPermissions(tool, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    const QByteArray path = qgetenv("PATH");
+    const auto restorePath = qScopeGuard([path] { qputenv("PATH", path); });
+    qputenv("PATH", bin.toLocal8Bit() + ':' + path);
+    QVERIFY(Upscaler::available());
+
+    const QString source = work.filePath(QStringLiteral("scan.png"));
+    QVERIFY(touchUpPhoto(64, 48).save(source));
+
+    ImageEditor editor;
+    QSignalSpy ready(&editor, &ImageEditor::upscaleReady);
+    QSignalSpy failed(&editor, &ImageEditor::failed);
+    QSignalSpy saved(&editor, &ImageEditor::saved);
+
+    // Stopped straight away, nothing is reported for it.
+    editor.generateUpscale(source, TouchUp::None, 2, 1);
+    editor.discardUpscale();
+    QTRY_VERIFY(!editor.busy());
+    QTest::qWait(50);
+    QCOMPARE(ready.count(), 0);
+    QCOMPARE(failed.count(), 0);
+
+    editor.generateUpscale(source, TouchUp::None, 2, 2);
+    QTRY_COMPARE(ready.count(), 1);
+    QCOMPARE(failed.count(), 0);
+    QCOMPARE(ready.first().at(1).toSize(), QSize(128, 96));
+    QCOMPARE(ready.first().at(2).toInt(), 2);
+    QCOMPARE(QImage(QUrl(ready.first().at(0).toString()).toLocalFile()).size(), QSize(128, 96));
+    QTRY_VERIFY(!editor.busy());
+    QVERIFY(editor.hasGeneratedUpscale(source, TouchUp::None, 2));
+    QVERIFY(!editor.hasGeneratedUpscale(source, TouchUp::None, 4));
+    QVERIFY(!editor.hasGeneratedUpscale(source, TouchUp::AutoFix, 2));
+
+    // Without the tool, only the generated result can be what is saved.
+    QVERIFY(QFile::remove(tool));
+    editor.saveTouchUp(source, TouchUp::None, 2, 3);
+    QTRY_COMPARE(saved.count() + failed.count(), 1);
+    QCOMPARE(failed.count(), 0);
+    const QString output = saved.first().at(0).toString();
+    QCOMPARE(QImage(output).size(), QSize(128, 96));
+    QCOMPARE(QImage(source).size(), QSize(64, 48));
+
+    // Once discarded, saving would need the tool again.
+    editor.discardUpscale();
+    QVERIFY(!editor.hasGeneratedUpscale(source, TouchUp::None, 2));
+    editor.saveTouchUp(source, TouchUp::None, 2, 4);
+    QTRY_COMPARE(failed.count(), 1);
   }
 
   // --- Quick image corrections ------------------------------------------

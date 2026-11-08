@@ -1209,13 +1209,43 @@ private slots:
     QVERIFY(!replace->isVisible());
     click(item(QStringLiteral("viewerRotateRight")));
     QTRY_VERIFY(replace->isVisible());
+    const QDateTime modified = QDateTime::currentDateTime().addDays(-30);
+    {
+      QFile file(source);
+      QVERIFY(file.open(QIODevice::ReadWrite));
+      QVERIFY(file.setFileTime(modified, QFileDevice::FileModificationTime));
+    }
+    const bool asked = m_settings->confirmReplace();
+    const auto restore = qScopeGuard([this, asked] { m_settings->setConfirmReplace(asked); });
+    m_settings->setConfirmReplace(true);
+
+    // Saving over the original asks first; cancelling leaves it alone.
+    QQuickItem* confirm = item(QStringLiteral("viewerReplaceConfirm"));
+    const auto within = [confirm](const char* name) {
+      return find(confirm, [name](QQuickItem* candidate) {
+        return candidate->objectName() == QLatin1String(name);
+      });
+    };
     click(replace);
+    QTRY_VERIFY(confirm->isVisible());
+    click(within("confirmationCancel"));
+    QTRY_VERIFY(!confirm->isVisible());
+    QCOMPARE(QImageReader(source).size(), original);
+
+    // Asked again, "Don't ask me again" turns the question off.
+    click(replace);
+    QTRY_VERIFY(confirm->isVisible());
+    click(within("confirmationCheck"));
+    click(within("confirmationAccept"));
 
     // The file itself is turned, under its own name, with no copy beside it,
-    // and the view no longer turns it a second time.
+    // and the view no longer turns it a second time. It keeps its date, so
+    // the library does not move it to the top as the newest picture.
     QTRY_COMPARE(QImageReader(source).size(), original.transposed());
     QTRY_COMPARE(prop("viewRotation").toInt(), 0);
     QVERIFY(!QFileInfo::exists(folder + QStringLiteral("/a-edited.jpg")));
+    QCOMPARE(QFileInfo(source).lastModified().toSecsSinceEpoch(), modified.toSecsSinceEpoch());
+    QVERIFY(!m_settings->confirmReplace());
   }
 
   void theToolbarHasTheCommonPictureControls() {

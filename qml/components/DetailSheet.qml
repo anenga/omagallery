@@ -491,6 +491,13 @@ Item {
                                             || imageFlipVertical
     property int rotationSaveJob: -1
     property bool rotationReplacing: false
+    // Save in the original's place was asked for; the window confirms it and
+    // then calls saveViewTransform(true).
+    signal replaceRequested()
+    // Shows the file as it is now, after it was saved over in place.
+    function reloadPicture() {
+        if (root.path !== "") Library.readPicture(root.path)
+    }
     // |replace| puts the turned picture in the original's place, with the
     // original moved to the Trash; otherwise a copy is saved beside it.
     function saveViewTransform(replace) {
@@ -514,9 +521,10 @@ Item {
             if (jobId !== root.rotationSaveJob) return
             root.rotationSaveJob = -1
             root.resetImageView()
+            if (root.rotationReplacing) root.reloadPicture()
             const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
             root.statusRequested(root.rotationReplacing
-                                 ? "Replaced " + name + "; the original is in the Trash"
+                                 ? "Saved " + name + "; the original is in the Trash"
                                  : "Saved " + name)
         }
         function onFailed(message, jobId) {
@@ -2142,9 +2150,9 @@ Item {
                     objectName: "replaceViewTransformButton"
                     visible: root.viewTransformed && !root.isDocument && !root.isVideo
                              && ImageEdit.canReplace(root.path)
-                    label: root.rotationSaveJob >= 0 && root.rotationReplacing ? "Replacing…" : "Replace"
-                    toolTip: "Replace the original with the rotated picture; the original goes to the Trash"
-                    onClicked: root.saveViewTransform(true)
+                    label: root.rotationSaveJob >= 0 && root.rotationReplacing ? "Saving…" : "Save"
+                    toolTip: "Save over the original; the original goes to the Trash"
+                    onClicked: if (root.viewTransformed && root.rotationSaveJob < 0) root.replaceRequested()
                 }
                 PillButton {
                     // At the minimum window width with details shown, even the

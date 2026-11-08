@@ -21,6 +21,8 @@ constexpr int kTimeoutMs = 15 * 60 * 1000;
 
 namespace Upscaler {
 
+QString stoppedMessage() { return QStringLiteral("AI Uprez was stopped"); }
+
 QString program() {
   return QStandardPaths::findExecutable(QString::fromLatin1(kProgram));
 }
@@ -49,7 +51,7 @@ QString modelDirectory(const QString& programPath) {
 }
 
 QImage upscale(const QImage& image, int factor, qint64 maxPixels, QString* error,
-               const std::function<void(qreal)>& progress) {
+               const std::function<void(qreal)>& progress, const std::atomic_bool* cancel) {
   const auto fail = [error](const QString& message) {
     if (error) *error = message;
     return QImage();
@@ -106,6 +108,11 @@ QImage upscale(const QImage& image, int factor, qint64 maxPixels, QString* error
   QElapsedTimer clock;
   clock.start();
   while (process.state() != QProcess::NotRunning) {
+    if (cancel && cancel->load()) {
+      process.kill();
+      process.waitForFinished(5'000);
+      return fail(stoppedMessage());
+    }
     if (clock.elapsed() > kTimeoutMs) {
       process.kill();
       process.waitForFinished(5'000);
@@ -133,6 +140,7 @@ QImage upscale(const QImage& image, int factor, qint64 maxPixels, QString* error
                     : QStringLiteral("AI Uprez failed: %1").arg(detail.left(160)));
   }
 
+  if (cancel && cancel->load()) return fail(stoppedMessage());
   QImage result(output);
   if (result.isNull()) return fail(QStringLiteral("Could not read the upscaled picture"));
   const QSize target = image.size() * factor;

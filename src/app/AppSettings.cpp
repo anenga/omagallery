@@ -53,6 +53,7 @@ constexpr int kMinimumTileWidth = 160;
 constexpr int kMaximumTileWidth = 480;
 constexpr auto kSlideshowVideos = "slideshow/includeVideos";
 constexpr auto kConfirmPermanentDelete = "actions/confirmPermanentDelete";
+constexpr auto kConfirmReplace = "actions/confirmReplace";
 constexpr auto kSlideshowInterval = "slideshow/intervalSeconds";
 constexpr auto kSlideshowShuffle = "slideshow/shuffle";
 constexpr auto kEnlargeSmallPictures = "viewer/enlargeSmallPictures";
@@ -271,6 +272,7 @@ AppSettings::AppSettings(QObject* parent)
   m_previewHeight = qBound(360, m_settings.value(kPreviewHeight, 700).toInt(), 8192);
   m_slideshowVideos = m_settings.value(kSlideshowVideos, false).toBool();
   m_confirmPermanentDelete = m_settings.value(kConfirmPermanentDelete, true).toBool();
+  m_confirmReplace = m_settings.value(kConfirmReplace, true).toBool();
   m_slideshowIntervalSeconds = qBound(2, m_settings.value(kSlideshowInterval, 4).toInt(), 20);
   m_slideshowShuffle = m_settings.value(kSlideshowShuffle, false).toBool();
   m_enlargeSmallPictures = m_settings.value(kEnlargeSmallPictures, true).toBool();
@@ -592,6 +594,13 @@ void AppSettings::setConfirmPermanentDelete(bool value) {
   m_confirmPermanentDelete = value;
   setValue(kConfirmPermanentDelete, value);
   emit confirmPermanentDeleteChanged();
+}
+
+void AppSettings::setConfirmReplace(bool value) {
+  if (m_confirmReplace == value) return;
+  m_confirmReplace = value;
+  setValue(kConfirmReplace, value);
+  emit confirmReplaceChanged();
 }
 
 void AppSettings::setSlideshowIntervalSeconds(int seconds) {

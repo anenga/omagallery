@@ -6,8 +6,9 @@ import QtQuick.Controls.Basic
 // Each option is a toggle; the preview shows them combined, exactly as the
 // writer will apply them (crop first, then levels). "Before" shows the
 // untouched picture for comparison. The original is never modified.
-// AI Uprez is too slow to preview live: it runs, locally through Real-ESRGAN,
-// only when the copy is saved.
+// AI Uprez is too slow to preview live: Generate runs it, locally through
+// Real-ESRGAN, and After then shows the result, which saving writes as it is.
+// Changing an option drops it. Saving without generating runs it then.
 Item {
     id: root
 
@@ -29,24 +30,62 @@ Item {
     // animated, writable); otherwise only a copy is offered.
     property bool replaceable: false
     property bool replacing: false
+    // AI Uprez run ahead of saving: its job, and its result once ready.
+    property bool generating: false
+    property int generateJob: -1
+    property string generatedUrl: ""
+    property size generatedSize: Qt.size(0, 0)
+    readonly property bool generated: generatedUrl !== ""
 
     // Matches TouchUp::Step in src/edit/TouchUp.h.
     readonly property int steps: (smartCrop ? 1 : 0) | (autoFix ? 2 : 0)
     readonly property int shownSteps: showBefore ? 0 : steps
-    readonly property var previewSource: root.visible && root.path !== ""
-        ? "image://edit/0.0.0.0." + root.shownSteps + encodeURIComponent(root.path)
-        : ""
+    readonly property bool hasAfter: steps !== 0 || generated
+    readonly property var previewSource: !root.visible || root.path === "" ? ""
+        : root.generated && !root.showBefore ? root.generatedUrl
+        : "image://edit/0.0.0.0." + root.shownSteps + encodeURIComponent(root.path)
     readonly property int factor: uprez && uprezAvailable ? uprezFactor : 0
-    readonly property bool canSave: !root.saving && !ImageEdit.busy
+    readonly property bool canSave: !root.saving && !root.generating && !ImageEdit.busy
                                     && (root.steps !== 0 || root.factor !== 0)
                                     && preview.status === Image.Ready
 
     // |replaced| when the touched-up picture took the original's place and
     // the original went to the Trash.
     signal saved(string outputPath, bool replaced)
+    // Save over the original was asked for; the window confirms it and then
+    // calls save(true).
+    signal replaceRequested()
 
     function shade(base, amount) {
         return Qt.rgba(base.r, base.g, base.b, amount)
+    }
+
+    // The generated result no longer matches what is chosen.
+    onStepsChanged: resetGenerated()
+    onFactorChanged: resetGenerated()
+
+    function resetGenerated() {
+        if (!root.generating && !root.generated) return
+        generating = false
+        generateJob = -1
+        generatedUrl = ""
+        generatedSize = Qt.size(0, 0)
+        progress = -1
+        ImageEdit.discardUpscale()
+    }
+
+    function generate() {
+        if (root.factor === 0 || root.generating || root.saving || ImageEdit.busy) return
+        errorText = ""
+        showBefore = false
+        generating = true
+        progress = 0
+        generateJob = ImageEdit.nextJobId()
+        ImageEdit.generateUpscale(root.path, root.steps, root.factor, root.generateJob)
+    }
+
+    function stopGenerating() {
+        if (root.generating) resetGenerated()
     }
 
     function open(filePath, name) {
@@ -60,6 +99,7 @@ Item {
         autoFix = true
         uprez = false
         uprezAvailable = ImageEdit.upscalerAvailable()
+        resetGenerated()
         progress = -1
         showBefore = false
         errorText = ""
@@ -69,6 +109,8 @@ Item {
     }
 
     function close() {
+        // A save already running keeps its own hold on the generated file.
+        resetGenerated()
         jobGeneration = -1
         visible = false
     }
@@ -94,14 +136,29 @@ Item {
             root.saved(outputPath, root.replacing)
             root.close()
         }
+        function onUpscaleReady(previewUrl, size, jobId) {
+            if (jobId !== root.generateJob || !root.generating) return
+            root.generating = false
+            root.progress = -1
+            root.generatedSize = size
+            root.generatedUrl = previewUrl
+            root.showBefore = false
+        }
         function onFailed(message, jobId) {
+            if (jobId === root.generateJob && root.generating) {
+                root.generating = false
+                root.generateJob = -1
+                root.progress = -1
+                root.errorText = message
+                return
+            }
             if (jobId !== root.jobGeneration || !root.visible) return
             root.saving = false
             root.progress = -1
             root.errorText = message
         }
         function onTouchUpProgress(fraction, jobId) {
-            if (jobId !== root.jobGeneration) return
+            if (jobId !== root.jobGeneration && jobId !== root.generateJob) return
             root.progress = fraction
         }
     }
@@ -121,7 +178,7 @@ Item {
             acceptedButtons: Qt.AllButtons
             preventStealing: true
             onClicked: function (mouse) {
-                if (mouse.button === Qt.LeftButton && !root.saving) root.close()
+                if (mouse.button === Qt.LeftButton && !root.saving && !root.generating) root.close()
             }
         }
     }
@@ -341,7 +398,8 @@ Item {
                 Text {
                     id: badge
                     anchors.centerIn: parent
-                    text: root.showBefore || root.steps === 0 ? "Before" : "After"
+                    text: root.showBefore || !root.hasAfter ? "Before"
+                          : root.generated ? "After · AI Uprez " + root.factor + "×" : "After"
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
                     color: "white"
@@ -413,6 +471,15 @@ Item {
                             active: root.uprezFactor === 4
                             onClicked: root.uprezFactor = 4
                         }
+                        PillButton {
+                            objectName: "touchUpGenerate"
+                            visible: !root.generated
+                            label: root.generating ? "Stop" : "Generate"
+                            toolTip: root.generating ? "Stop upscaling"
+                                     : "Upscale now and show the result before saving"
+                            active: !root.generating && !root.saving && !ImageEdit.busy
+                            onClicked: root.generating ? root.stopGenerating() : root.generate()
+                        }
                     }
                 }
             }
@@ -434,13 +501,13 @@ Item {
                         label: "Before"
                         toolTip: "Show the original"
                         shortcut: "Space"
-                        active: root.showBefore || root.steps === 0
+                        active: root.showBefore || !root.hasAfter
                         onClicked: root.showBefore = true
                     }
                     PillButton {
                         objectName: "touchUpAfter"
                         label: "After"
-                        active: !root.showBefore && root.steps !== 0
+                        active: !root.showBefore && root.hasAfter
                         onClicked: root.showBefore = false
                     }
                 }
@@ -453,11 +520,17 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     elide: Text.ElideRight
                     text: root.errorText !== "" ? root.errorText
+                          : root.generating
+                            ? (root.progress >= 1 ? "Preparing the preview…"
+                               : "Upscaling… " + Math.round(root.progress * 100) + "%")
                           : root.saving && root.progress >= 0
                             ? "Upscaling… " + Math.round(root.progress * 100) + "%"
                           : root.saving ? "Saving…"
                           : root.steps === 0 && root.factor === 0 ? "Choose a touch-up"
-                          : root.factor > 0 ? "Uprez runs when you save; the original stays as it is"
+                          : root.generated
+                            ? "Upscaled to " + root.generatedSize.width + " × " + root.generatedSize.height
+                              + "; save it over the original or as a copy"
+                          : root.factor > 0 ? "Generate to see the uprez first, or save to run it now"
                           : "Saved as a copy; the original stays as it is"
                     font.family: Theme.fontFamily
                     font.pixelSize: 11
@@ -470,21 +543,22 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 8
                     PillButton {
+                        objectName: "touchUpCancel"
                         label: root.saving ? "Close" : "Cancel"
-                        toolTip: root.saving ? "Saving continues after closing" : ""
-                        onClicked: root.close()
+                        toolTip: root.saving ? "Saving continues after closing"
+                                 : root.generating ? "Stop upscaling" : ""
+                        onClicked: root.generating ? root.stopGenerating() : root.close()
                     }
                     PillButton {
                         objectName: "touchUpReplace"
                         visible: root.replaceable
-                        label: root.saving && root.replacing ? "Replacing…"
-                               : panel.compact ? "Replace" : "Save & replace"
-                        toolTip: "Replace the original with this; the original goes to the Trash"
-                        onClicked: root.save(true)
+                        label: root.saving && root.replacing ? "Saving…" : "Save"
+                        toolTip: "Save over the original; the original goes to the Trash"
+                        onClicked: if (root.canSave) root.replaceRequested()
                     }
                     PillButton {
                         objectName: "touchUpSave"
-                        label: root.saving && !root.replacing ? "Saving…" : panel.compact ? "Copy" : "Save a copy"
+                        label: root.saving && !root.replacing ? "Saving copy…" : panel.compact ? "Copy" : "Save a copy"
                         toolTip: "Save a touched-up copy beside the original"
                         active: root.canSave
                         onClicked: root.save(false)
@@ -496,7 +570,8 @@ Item {
 
     Keys.onPressed: function (event) {
         if (event.key === Qt.Key_Escape) {
-            if (!root.saving) root.close()
+            if (root.generating) root.stopGenerating()
+            else if (!root.saving) root.close()
             event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.save(false)

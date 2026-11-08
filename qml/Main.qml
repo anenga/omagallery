@@ -54,7 +54,8 @@ ApplicationWindow {
     // under an open sheet is disabled outright: pointer handlers take passive
     // grabs, so a scrim alone does not stop a tap on a sheet's control from
     // also reaching the tile, pill or viewer button under it.
-    readonly property bool modalOpen: confirm.visible || permanentConfirm.visible || matteSheet.visible
+    readonly property bool modalOpen: confirm.visible || permanentConfirm.visible || replaceConfirm.visible
+                                      || matteSheet.visible
                                       || correctionSheet.visible
                                       || touchUpSheet.visible
                                       || batchSheet.visible
@@ -85,6 +86,17 @@ ApplicationWindow {
 
     function organizationStatus(message) {
         root.say(Settings.organizationError || message)
+    }
+
+    // Saving over |path| asks first, unless the user said not to.
+    function askToReplace(path, proceed) {
+        if (!Settings.confirmReplace) {
+            proceed()
+            return
+        }
+        replaceConfirm.proceed = proceed
+        replaceConfirm.title = "Save over " + path.substring(path.lastIndexOf("/") + 1) + "?"
+        replaceConfirm.open()
     }
 
     function restoreFocusAfterSheet() {
@@ -302,7 +314,9 @@ ApplicationWindow {
     }
 
     function dismissTopLayer() {
-        if (confirm.visible) {
+        if (replaceConfirm.visible) {
+            replaceConfirm.close()
+        } else if (confirm.visible) {
             confirm.close()
         } else if (permanentConfirm.visible) {
             permanentConfirm.close()
@@ -1513,6 +1527,7 @@ ApplicationWindow {
             root.organizationStatus(text !== "" ? "Caption saved" : "Caption removed")
         }
         onStatusRequested: function (message) { root.say(message) }
+        onReplaceRequested: root.askToReplace(detail.path, function () { detail.saveViewTransform(true) })
         objectName: "detail"
         selectionLabel: root.viewerPaths.indexOf(detail.path) < 0 ? ""
                         : (root.viewerPaths.indexOf(detail.path) + 1)
@@ -1610,9 +1625,11 @@ ApplicationWindow {
     TouchUpSheet {
         id: touchUpSheet
         objectName: "touchUpSheet"
+        onReplaceRequested: root.askToReplace(touchUpSheet.path, function () { touchUpSheet.save(true) })
         onSaved: function (outputPath, replaced) {
             const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
-            root.say(replaced ? "Replaced " + name + "; the original is in the Trash" : "Saved " + name)
+            if (replaced && detail.visible && detail.path === outputPath) detail.reloadPicture()
+            root.say(replaced ? "Saved " + name + "; the original is in the Trash" : "Saved " + name)
         }
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
     }
@@ -1759,6 +1776,27 @@ ApplicationWindow {
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
     }
 
+    // Save in place of the original, from the detail view or Touch up.
+    ConfirmSheet {
+        id: replaceConfirm
+        objectName: "replaceConfirm"
+        property var proceed: null
+        detail: "The edited picture takes its place. The original goes to the Trash, where you can still restore it."
+        confirmLabel: "Save"
+        checkLabel: "Don't ask me again"
+        onAccepted: {
+            const proceed = replaceConfirm.proceed
+            replaceConfirm.proceed = null
+            if (replaceConfirm.checked) Settings.confirmReplace = false
+            if (proceed) proceed()
+        }
+        onVisibleChanged: {
+            if (visible) return
+            if (touchUpSheet.visible) Qt.callLater(touchUpSheet.forceActiveFocus)
+            else root.restoreFocusAfterSheet()
+        }
+    }
+
     // Transient status line, so a result or a missing handler is reported where
     // the user is already looking rather than swallowed.
     QtObject {
@@ -1800,6 +1838,12 @@ ApplicationWindow {
     Connections {
         target: ImageEdit
         function onSaved(outputPath, jobId) {
+            // A picture saved over in place is already in the library, and
+            // its sheet says what happened.
+            if (outputPath === detail.path || outputPath === touchUpSheet.path) {
+                Library.refresh()
+                return
+            }
             Library.addExtraFiles([outputPath])
             Library.refresh()
             root.say("Saved a corrected copy beside the original")
