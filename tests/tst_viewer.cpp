@@ -1248,6 +1248,40 @@ private slots:
     QVERIFY(!m_settings->confirmReplace());
   }
 
+  void trashCanStopAsking() {
+    const QString folder = m_scratch.filePath(QStringLiteral("trash-unasked"));
+    QVERIFY(QDir().mkpath(folder));
+    const QString first = folder + QStringLiteral("/a.jpg");
+    const QString second = folder + QStringLiteral("/b.jpg");
+    const QString third = folder + QStringLiteral("/c.jpg");
+    for (const QString& path : {first, second, third}) {
+      QVERIFY(QFile::copy(media(QStringLiteral("Shot 1.jpg")), path));
+    }
+    const bool asked = m_settings->confirmTrash();
+    const auto restore = qScopeGuard([this, asked] { m_settings->setConfirmTrash(asked); });
+    m_settings->setConfirmTrash(true);
+    open({first, second, third});
+    QTRY_VERIFY(prop("imageReady").toBool());
+
+    // "Don't ask me again" turns the question off as it moves the picture.
+    QQuickItem* confirm = item(QStringLiteral("viewerConfirm"));
+    QTest::keyClick(m_window, Qt::Key_Delete);
+    QTRY_VERIFY(confirm->isVisible());
+    click(find(confirm, [](QQuickItem* candidate) {
+      return candidate->objectName() == QLatin1String("confirmationCheck");
+    }));
+    QTest::keyClick(m_window, Qt::Key_Return);
+    QTRY_VERIFY(!QFile::exists(first));
+    QVERIFY(!m_settings->confirmTrash());
+
+    // After that, Delete moves the next one straight away.
+    QTRY_COMPARE(m_session->path(), second);
+    QTest::keyClick(m_window, Qt::Key_Delete);
+    QTRY_VERIFY(!QFile::exists(second));
+    QVERIFY(!confirm->isVisible());
+    QVERIFY(QFile::exists(third));
+  }
+
   void theToolbarHasTheCommonPictureControls() {
     const QString folder = m_scratch.filePath(QStringLiteral("toolbar"));
     QVERIFY(QDir().mkpath(folder));

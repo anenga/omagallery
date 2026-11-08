@@ -738,7 +738,16 @@ ApplicationWindow {
         confirm.path = Session.deletionPath
         confirm.viewedPath = Session.path
         confirm.detail = confirm.path
-        confirm.open()
+        if (Settings.confirmTrash) confirm.open()
+        else root.movePendingToTrash()
+    }
+
+    function movePendingToTrash() {
+        if (confirm.path !== "" && Actions.moveToTrash(confirm.path)) {
+            Session.forget(confirm.viewedPath)
+            root.say("Moved to Trash")
+        }
+        confirm.path = ""
     }
 
     function requestPermanentDelete() {
@@ -2054,12 +2063,10 @@ ApplicationWindow {
         property string viewedPath: ""
         title: "Move this item to Trash?"
         confirmLabel: "Move to Trash"
+        checkLabel: "Don't ask me again"
         onAccepted: {
-            if (confirm.path !== "" && Actions.moveToTrash(confirm.path)) {
-                Session.forget(confirm.viewedPath)
-                root.say("Moved to Trash")
-            }
-            confirm.path = ""
+            if (confirm.checked) Settings.confirmTrash = false
+            root.movePendingToTrash()
         }
         onVisibleChanged: if (!visible) keys.forceActiveFocus()
     }

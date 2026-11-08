@@ -488,6 +488,39 @@ Item {
                 width: parent.width
                 spacing: 12
                 Column {
+                    width: parent.width - trashConfirmation.width - 12
+                    spacing: 2
+                    Text {
+                        text: "Confirm moving to Trash"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
+                        color: Theme.foreground
+                    }
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "Ask before Delete moves a picture to Trash. Off moves it straight away; it can still be restored from Trash."
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 10
+                        color: Theme.mutedText
+                    }
+                }
+                PillButton {
+                    id: trashConfirmation
+                    objectName: "trashConfirmation"
+                    accessibleName: "Confirm moving to Trash"
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: Settings.confirmTrash ? "On" : "Off"
+                    checkable: true
+                    active: Settings.confirmTrash
+                    onClicked: Settings.confirmTrash = !Settings.confirmTrash
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 12
+                Column {
                     width: parent.width - replaceConfirmation.width - 12
                     spacing: 2
                     Text {

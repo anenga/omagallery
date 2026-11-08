@@ -57,6 +57,8 @@ class AppSettings final : public QObject {
                  confirmPermanentDeleteChanged)
   // Ask before a corrected picture is saved over its original.
   Q_PROPERTY(bool confirmReplace READ confirmReplace WRITE setConfirmReplace NOTIFY confirmReplaceChanged)
+  // Ask before moving to Trash.
+  Q_PROPERTY(bool confirmTrash READ confirmTrash WRITE setConfirmTrash NOTIFY confirmTrashChanged)
   // Slideshow timing and order.
   Q_PROPERTY(int slideshowIntervalSeconds READ slideshowIntervalSeconds WRITE
                  setSlideshowIntervalSeconds NOTIFY slideshowIntervalSecondsChanged)
@@ -142,6 +144,8 @@ public:
   void setConfirmPermanentDelete(bool value);
   [[nodiscard]] bool confirmReplace() const { return m_confirmReplace; }
   void setConfirmReplace(bool value);
+  [[nodiscard]] bool confirmTrash() const { return m_confirmTrash; }
+  void setConfirmTrash(bool value);
   [[nodiscard]] int slideshowIntervalSeconds() const { return m_slideshowIntervalSeconds; }
   void setSlideshowIntervalSeconds(int seconds);
   [[nodiscard]] bool slideshowShuffle() const { return m_slideshowShuffle; }
@@ -276,6 +280,7 @@ signals:
   void slideshowVideosChanged();
   void confirmPermanentDeleteChanged();
   void confirmReplaceChanged();
+  void confirmTrashChanged();
   void slideshowIntervalSecondsChanged();
   void slideshowShuffleChanged();
   void viewerFilmstripChanged();
@@ -369,6 +374,7 @@ private:
   bool m_slideshowVideos = false;
   bool m_confirmPermanentDelete = true;
   bool m_confirmReplace = true;
+  bool m_confirmTrash = true;
   int m_slideshowIntervalSeconds = 4;
   bool m_slideshowShuffle = false;
   bool m_viewerFilmstrip = false;

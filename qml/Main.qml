@@ -40,6 +40,9 @@ ApplicationWindow {
     // move the selection under a modal, and trashing the wrong file is
     // unforgivable.
     property var pendingDeleteTarget: ({})
+    // The next Trash prompt is shown even with "Don't ask me again" set,
+    // because it asks a real question (which exact copy to keep).
+    property bool trashAlwaysAsks: false
     property var pendingDuplicateKeep: ({})
     property var pendingDeleteBatch: []
     // While a collection rename is in flight the old name is gone from the
@@ -632,7 +635,16 @@ ApplicationWindow {
         root.pendingDuplicateKeep = ({})
         confirm.title = "Move this item to Trash?"
         confirm.detail = target.path
-        confirm.open()
+        root.openTrashConfirm()
+    }
+
+    // Asks before moving to Trash, unless the user said not to.
+    function openTrashConfirm() {
+        const ask = root.trashAlwaysAsks || Settings.confirmTrash
+        confirm.checkLabel = root.trashAlwaysAsks ? "" : "Don't ask me again"
+        root.trashAlwaysAsks = false
+        if (ask) confirm.open()
+        else root.movePendingToTrash()
     }
 
     function requestDeleteBatch(paths, title, detail) {
@@ -651,7 +663,7 @@ ApplicationWindow {
         confirm.detail = detail === undefined
                          ? paths.length + " files. They stay recoverable from your file manager."
                          : detail
-        confirm.open()
+        root.openTrashConfirm()
     }
 
     function requestPermanentDelete(paths) {
@@ -713,10 +725,12 @@ ApplicationWindow {
         const keep = root.captureTrashTarget(path)
         if (keep.path === undefined) return
         const name = path.substring(path.lastIndexOf("/") + 1)
+        root.trashAlwaysAsks = true
         root.requestDeleteBatch(others,
                                 "Keep " + name + " and trash " + others.length
                                 + (others.length === 1 ? " copy?" : " copies?"),
                                 "Only byte-for-byte identical copies are moved. They remain recoverable from your file manager.")
+        root.trashAlwaysAsks = false
         if (confirm.visible) root.pendingDuplicateKeep = keep
     }
 
@@ -1732,35 +1746,40 @@ ApplicationWindow {
         objectName: "confirm"
         confirmLabel: "Move to Trash"
         onAccepted: {
-            if (root.pendingDuplicateKeep.path !== undefined) {
-                Actions.moveDuplicateCopiesToTrash(root.pendingDuplicateKeep, root.pendingDeleteBatch)
-                root.say("Checking exact copies before moving them")
-            } else if (root.pendingDeleteBatch.length > 0) {
-                let moved = 0
-                const failed = []
-                for (const target of root.pendingDeleteBatch) {
-                    if (Actions.moveCapturedToTrash(target)) moved++
-                    else failed.push(target.viewedPath)
-                }
-                if (moved > 0) {
-                    root.say(moved === root.pendingDeleteBatch.length
-                             ? "Moved " + moved + (moved === 1 ? " item" : " items") + " to Trash"
-                             : "Moved " + moved + " of " + root.pendingDeleteBatch.length + " items to Trash")
-                }
-                library.clearChecked()
-                for (const path of failed) library.toggleChecked(path)
-                if (failed.length > 0) root.say("Moved " + moved + " of " + root.pendingDeleteBatch.length
-                                              + " items to Trash; " + failed.length + " could not be moved")
-                Library.refresh()
-            } else if (Actions.moveCapturedToTrash(root.pendingDeleteTarget)) {
-                root.say("Moved to Trash")
-                Library.refresh()
-            }
-            root.pendingDeleteTarget = ({})
-            root.pendingDeleteBatch = []
-            root.pendingDuplicateKeep = ({})
+            if (confirm.checked && confirm.checkLabel !== "") Settings.confirmTrash = false
+            root.movePendingToTrash()
         }
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
+    }
+
+    function movePendingToTrash() {
+        if (root.pendingDuplicateKeep.path !== undefined) {
+            Actions.moveDuplicateCopiesToTrash(root.pendingDuplicateKeep, root.pendingDeleteBatch)
+            root.say("Checking exact copies before moving them")
+        } else if (root.pendingDeleteBatch.length > 0) {
+            let moved = 0
+            const failed = []
+            for (const target of root.pendingDeleteBatch) {
+                if (Actions.moveCapturedToTrash(target)) moved++
+                else failed.push(target.viewedPath)
+            }
+            if (moved > 0) {
+                root.say(moved === root.pendingDeleteBatch.length
+                         ? "Moved " + moved + (moved === 1 ? " item" : " items") + " to Trash"
+                         : "Moved " + moved + " of " + root.pendingDeleteBatch.length + " items to Trash")
+            }
+            library.clearChecked()
+            for (const path of failed) library.toggleChecked(path)
+            if (failed.length > 0) root.say("Moved " + moved + " of " + root.pendingDeleteBatch.length
+                                          + " items to Trash; " + failed.length + " could not be moved")
+            Library.refresh()
+        } else if (Actions.moveCapturedToTrash(root.pendingDeleteTarget)) {
+            root.say("Moved to Trash")
+            Library.refresh()
+        }
+        root.pendingDeleteTarget = ({})
+        root.pendingDeleteBatch = []
+        root.pendingDuplicateKeep = ({})
     }
 
     ConfirmSheet {
