@@ -19,8 +19,8 @@ constexpr int kFallbackEdge = 320;
 class ThumbnailResponse final : public QQuickImageResponse, public QRunnable {
 public:
   ThumbnailResponse(QString path, QSize logicalSize, qreal devicePixelRatio, int seekPercent,
-                    std::shared_ptr<std::atomic_bool> stopping)
-      : m_path(std::move(path)), m_logicalSize(logicalSize),
+                    QString version, std::shared_ptr<std::atomic_bool> stopping)
+      : m_path(std::move(path)), m_version(std::move(version)), m_logicalSize(logicalSize),
         m_devicePixelRatio(devicePixelRatio), m_seekPercent(seekPercent),
         m_stopping(std::move(stopping)) {
     setAutoDelete(false);
@@ -54,7 +54,7 @@ public:
       return;
     }
     QImage image = ThumbnailCache::thumbnail(m_path, m_logicalSize, m_devicePixelRatio,
-                                            m_seekPercent, cancelled);
+                                            m_seekPercent, cancelled, m_version);
     if (cancelled.isCancelled()) {
       m_error = QStringLiteral("Cancelled");
     } else if (image.isNull()) {
@@ -72,6 +72,7 @@ public:
 
 private:
   QString m_path;
+  QString m_version;
   QSize m_logicalSize;
   qreal m_devicePixelRatio = 1.0;
   int m_seekPercent = 20;
@@ -118,6 +119,7 @@ QQuickImageResponse* ThumbnailProvider::requestImageResponse(const QString& id,
   // contains a slash, so the first one starts the path.
   const QString decoded = QUrl::fromPercentEncoding(id.toUtf8());
   QString path = decoded;
+  QString version;
 
   const qsizetype separator = decoded.indexOf(QLatin1Char('/'));
   if (separator > 0) {
@@ -125,6 +127,7 @@ QQuickImageResponse* ThumbnailProvider::requestImageResponse(const QString& id,
 
     const qsizetype tilde = head.indexOf(QLatin1Char('~'));
     if (tilde > 0) {
+      version = head.mid(tilde + 1);
       head = head.left(tilde);
     }
 
@@ -147,12 +150,13 @@ QQuickImageResponse* ThumbnailProvider::requestImageResponse(const QString& id,
   }
 
   QSize logicalSize = requestedSize;
-  if (logicalSize.width() <= 0 || logicalSize.height() <= 0) {
+  // A width with no height asks for the whole picture at that width.
+  if (logicalSize.width() <= 0) {
     logicalSize = QSize(kFallbackEdge, kFallbackEdge);
   }
 
   auto* response = new ThumbnailResponse(path, logicalSize, devicePixelRatio, seekPercent,
-                                         m_stopping);
+                                         version, m_stopping);
   m_pool.start(response);
   return response;
 }

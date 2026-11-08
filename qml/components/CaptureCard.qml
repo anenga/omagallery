@@ -32,6 +32,13 @@ Item {
     // time and size appear on hover, like a photos app.
     property bool gallery: false
     readonly property bool hovered: hover.hovered
+    readonly property int galleryWidthStep: {
+        const steps = [160, 200, 240, 280, 320, 360, 400, 480, 560, 640, 800, 960, 1200, 1600]
+        for (const step of steps) {
+            if (step >= width) return step
+        }
+        return Math.ceil(width / 400) * 400
+    }
     readonly property bool stripShown: !gallery || hover.hovered || keyboardCurrent
                                        || Settings.showGridFilenames
                                        || ocrSnippet !== ""
@@ -83,7 +90,8 @@ Item {
 
     function updateThumbnailLayout() {
         // Read the size outside the source binding to avoid a binding loop.
-        thumbnailLayoutReady = thumbnail.sourceSize.width > 0 && thumbnail.sourceSize.height > 0
+        thumbnailLayoutReady = thumbnail.sourceSize.width > 0
+                               && (root.gallery || thumbnail.sourceSize.height > 0)
     }
     Component.onCompleted: root.updateThumbnailLayout()
 
@@ -195,7 +203,14 @@ Item {
             // Decode at the size actually drawn, on the ratio of the screen this
             // window is on. Without the ratio, a 1.5x monitor shows an upscaled
             // tile and the whole grid reads as soft.
-            sourceSize: Qt.size(Math.round(root.width), Math.round(root.height))
+            //
+            // A gallery tile asks for the whole picture at a width step and
+            // no height. The cached tile then does not change as the picture's
+            // shape is learned or the window is resized a little, which on a
+            // network share is the difference between a cache hit and reading
+            // the whole photo again.
+            sourceSize: root.gallery ? Qt.size(root.galleryWidthStep, 0)
+                                     : Qt.size(Math.round(root.width), Math.round(root.height))
             // Let Image's size setter finish before enabling a new source.
             onSourceSizeChanged: Qt.callLater(root.updateThumbnailLayout)
             // "image://thumbs/<ratio>[@<seek%>][~<stamp>]<encoded path>". The

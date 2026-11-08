@@ -131,9 +131,21 @@ void ThumbnailCache::prune(qint64 maxBytes) {
   }
 }
 
+QString ThumbnailCache::diskKeyFromVersion(const QString& version) {
+  const QStringList fields = version.split(QLatin1Char('-'));
+  if (fields.size() != 7) return {};
+  for (const QString& field : fields) {
+    bool okay = false;
+    field.toULongLong(&okay);
+    if (!okay) return {};
+  }
+  return fields.mid(2).join(QLatin1Char('-'));
+}
+
 QString ThumbnailCache::cacheKey(const QString& path, const QString& renderPath,
-                                 const QSize& pixelSize, int seekPercent) {
-  const QString version = FileVersion::diskKey(path);
+                                 const QSize& pixelSize, int seekPercent,
+                                 const QString& knownDiskKey) {
+  const QString version = knownDiskKey.isEmpty() ? FileVersion::diskKey(path) : knownDiskKey;
   const QString dependency = renderPath == path ? version : FileVersion::diskKey(renderPath);
   const QString identity = QStringLiteral("cover5|%1|%2|%3|%4|%5x%6|t%7")
                                .arg(path, version, renderPath, dependency)
@@ -259,20 +271,38 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
 QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
                                  qreal devicePixelRatio, int seekPercent,
                                  Cancellation cancelled) {
-  if (isCancelled(cancelled) || path.isEmpty() || !QFileInfo::exists(path)) {
+  return thumbnail(path, logicalSize, devicePixelRatio, seekPercent, cancelled, {});
+}
+
+QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
+                                 qreal devicePixelRatio, int seekPercent,
+                                 Cancellation cancelled, const QString& knownVersion) {
+  if (isCancelled(cancelled) || path.isEmpty()) {
     return {};
   }
 
   const qreal ratio = std::clamp(devicePixelRatio, qreal(1.0), kMaxDevicePixelRatio);
-  const QSize pixelSize(static_cast<int>(std::ceil(logicalSize.width() * ratio)),
-                        static_cast<int>(std::ceil(logicalSize.height() * ratio)));
+  const bool wholeAtWidth = logicalSize.width() > 0 && logicalSize.height() <= 0;
+  const int pixelWidth = static_cast<int>(std::ceil(logicalSize.width() * ratio));
+  // The key's size. A whole-picture request is keyed by its width alone.
+  const QSize keySize(pixelWidth, wholeAtWidth ? 0
+                                               : static_cast<int>(std::ceil(logicalSize.height() * ratio)));
+  // What the renderers cover. A square box covers any shape at the width,
+  // and the result is brought down to the width below.
+  const QSize pixelSize = wholeAtWidth ? QSize(pixelWidth, pixelWidth) : keySize;
   if (pixelSize.isEmpty()) {
     return {};
   }
 
   const QString directory = cacheDirectory();
+  // A transcode shares its original's tile, which needs a look at the disk.
+  // Anything else is identified by the library's own record of it.
   const QString renderPath = ThumbnailSource::path(path);
-  const QString key = cacheKey(path, renderPath, pixelSize, seekPercent);
+  const QString knownDiskKey = renderPath == path ? diskKeyFromVersion(knownVersion) : QString();
+  if (knownDiskKey.isEmpty() && !QFileInfo::exists(path)) {
+    return {};
+  }
+  const QString key = cacheKey(path, renderPath, keySize, seekPercent, knownDiskKey);
   const QString cachePath = directory + QLatin1Char('/') + key + QStringLiteral(".jpg");
 
   QImage cached(cachePath);
@@ -281,6 +311,9 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
   }
   if (!cached.isNull()) {
     return cached;
+  }
+  if (!knownDiskKey.isEmpty() && !QFileInfo::exists(path)) {
+    return {};
   }
   // Older tiles have no ctime in their key. Reuse them only when the source
   // has not changed since the tile was written, including preserved-mtime saves.
@@ -299,7 +332,8 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
            (info.st_ctim.tv_sec == tileInfo.st_mtim.tv_sec &&
             info.st_ctim.tv_nsec <= tileInfo.st_mtim.tv_nsec);
   };
-  if (renderPath == path && ::stat(QFile::encodeName(legacyPath).constData(), &tileInfo) == 0 &&
+  if (!wholeAtWidth && renderPath == path &&
+      ::stat(QFile::encodeName(legacyPath).constData(), &tileInfo) == 0 &&
       unchanged(path)) {
     cached.load(legacyPath);
     if (!cached.isNull()) return isCancelled(cancelled) ? QImage{} : cached;
@@ -342,9 +376,16 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
     return {};
   }
 
-  // Scale down until the short side meets the tile. Only when both sides
-  // overhang: otherwise expanding to cover would be an upscale.
-  if (rendered.width() > pixelSize.width() && rendered.height() > pixelSize.height()) {
+  if (wholeAtWidth) {
+    // The whole picture at the requested width, never cropped. An extreme
+    // strip is bounded by height instead, still whole.
+    const QSize bound(pixelWidth, pixelWidth * 8);
+    if (rendered.width() > bound.width() || rendered.height() > bound.height()) {
+      rendered = rendered.scaled(bound, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+  } else if (rendered.width() > pixelSize.width() && rendered.height() > pixelSize.height()) {
+    // Scale down until the short side meets the tile. Only when both sides
+    // overhang: otherwise expanding to cover would be an upscale.
     rendered = rendered.scaled(pixelSize, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
   }
   if (isCancelled(cancelled)) {
@@ -357,7 +398,7 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
   // limit it would not draw at all.
   const int maxWidth = pixelSize.width() * 2;
   const int maxHeight = pixelSize.height() * 2;
-  if (rendered.width() > maxWidth || rendered.height() > maxHeight) {
+  if (!wholeAtWidth && (rendered.width() > maxWidth || rendered.height() > maxHeight)) {
     const int width = std::min(rendered.width(), maxWidth);
     const int height = std::min(rendered.height(), maxHeight);
     rendered = rendered.copy((rendered.width() - width) / 2, (rendered.height() - height) / 2,
