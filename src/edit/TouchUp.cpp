@@ -23,9 +23,34 @@ constexpr int kLineTolerance = 28;
 constexpr int kNeutralChroma = 40;
 // No side gives up more than this share of the picture.
 constexpr double kMaxSideShare = 0.15;
+// A shadow seam line: at least this share near its median, every pixel
+// within this chroma for this share of the line, and darker than this grey
+// (a white tub or sky is bright; the seam and backing are not).
+constexpr double kSeamUniformShare = 0.5;
+constexpr int kSeamPixelChroma = 24;
+constexpr double kSeamNeutralShare = 0.9;
+constexpr int kSeamMaxGrey = 200;
+// Taken past the border on each trimmed side, as a share of the long edge.
+constexpr double kEdgePad = 0.004;
+// Lines that are not border, in a row, before a side's border is over.
+constexpr int kMissedLines = 2;
 
-bool isBorderLine(std::vector<QRgb>& pixels) {
-  if (pixels.empty()) return false;
+struct LineClass {
+  bool border = false;
+  QRgb median = 0;
+};
+
+bool close(QRgb a, QRgb b) {
+  return std::max({std::abs(qRed(a) - qRed(b)), std::abs(qGreen(a) - qGreen(b)),
+                   std::abs(qBlue(a) - qBlue(b))}) < kLineTolerance;
+}
+
+// Whether a line is border. Either it is neutral and nearly all one colour
+// (the backing, or the light strip at a print's edge), or it is part of the
+// shadow seam a print's edge casts: neutral pixel by pixel, darker than a
+// white strip, and mostly even, though it fades along its length.
+LineClass classify(const std::vector<QRgb>& pixels) {
+  if (pixels.empty()) return {};
   std::vector<int> r(pixels.size());
   std::vector<int> g(pixels.size());
   std::vector<int> b(pixels.size());
@@ -39,30 +64,45 @@ bool isBorderLine(std::vector<QRgb>& pixels) {
     std::nth_element(values.begin(), middle, values.end());
     return *middle;
   };
-  const int mr = median(r);
-  const int mg = median(g);
-  const int mb = median(b);
-  const int chroma = std::max({mr, mg, mb}) - std::min({mr, mg, mb});
-  if (chroma > kNeutralChroma) return false;
+  const QRgb centre = qRgb(median(r), median(g), median(b));
+  const int chroma = std::max({qRed(centre), qGreen(centre), qBlue(centre)}) -
+                     std::min({qRed(centre), qGreen(centre), qBlue(centre)});
+  if (chroma > kNeutralChroma) return {false, centre};
 
-  size_t close = 0;
-  for (size_t i = 0; i < pixels.size(); ++i) {
-    const int distance = std::max({std::abs(r[i] - mr), std::abs(g[i] - mg), std::abs(b[i] - mb)});
-    if (distance < kLineTolerance) ++close;
+  size_t near = 0;
+  size_t neutral = 0;
+  for (const QRgb pixel : pixels) {
+    if (close(pixel, centre)) ++near;
+    const int spread = std::max({qRed(pixel), qGreen(pixel), qBlue(pixel)}) -
+                       std::min({qRed(pixel), qGreen(pixel), qBlue(pixel)});
+    if (spread <= kSeamPixelChroma) ++neutral;
   }
-  return static_cast<double>(close) >= kUniformShare * static_cast<double>(pixels.size());
+  const double count = static_cast<double>(pixels.size());
+  const double nearShare = static_cast<double>(near) / count;
+  if (nearShare >= kUniformShare) return {true, centre};
+  const bool seam = nearShare >= kSeamUniformShare && qGray(centre) < kSeamMaxGrey &&
+                    static_cast<double>(neutral) >= kSeamNeutralShare * count;
+  return {seam, centre};
 }
 
-// How many lines, counted in from one side, are border.
+// How many lines, counted in from one side, are wholly border.
 template <typename LineAt>
 int peel(int lineCount, LineAt lineAt) {
   const int limit = static_cast<int>(lineCount * kMaxSideShare);
   std::vector<QRgb> pixels;
   int peeled = 0;
-  while (peeled < limit) {
-    lineAt(peeled, pixels);
-    if (!isBorderLine(pixels)) break;
-    ++peeled;
+  // A stray line that is not border (a speck of dust, a corner of the print
+  // lifting into the first line) does not end the border, but a few do.
+  int misses = 0;
+  for (int i = 0; i < limit; ++i) {
+    lineAt(i, pixels);
+    const LineClass line = classify(pixels);
+    if (!line.border) {
+      if (++misses > kMissedLines) break;
+      continue;
+    }
+    misses = 0;
+    peeled = i + 1;
   }
   return peeled;
 }
@@ -110,9 +150,11 @@ QRectF detectBorder(const QImage& image) {
   int right = peel(w, [&](int i, std::vector<QRgb>& out) { column(w - 1 - i, out); });
   if (top + bottom + left + right == 0) return whole;
 
-  // The last border line blends into the first picture line after scaling;
-  // take a hair more on each trimmed side so no grey seam survives.
-  const int pad = std::max(1, static_cast<int>(std::lround(std::max(w, h) * 0.002)));
+  // A print never sits perfectly square in a sheet-fed scanner, so its edge
+  // runs at a slight slant, and the last border line blends into the first
+  // picture line after scaling. Take a little more on each trimmed side so
+  // no sliver of backing or shadow survives.
+  const int pad = std::max(1, static_cast<int>(std::lround(std::max(w, h) * kEdgePad)));
   if (top > 0) top += pad;
   if (bottom > 0) bottom += pad;
   if (left > 0) left += pad;

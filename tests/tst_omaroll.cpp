@@ -9001,6 +9001,50 @@ private slots:
     QCOMPARE(cropped.size(), found.size());
   }
 
+  void touchUpSmartCropFollowsASlantedEdge() {
+    // How a sheet-fed scanner sees a print: on its light backing, fed a
+    // little askew, with an uneven grey shadow seam along the trailing edge.
+    const QImage photo = touchUpPhoto(600, 400);
+    QImage scan(660, 460, QImage::Format_RGB32);
+    scan.fill(qRgb(236, 236, 238));
+    {
+      QPainter painter(&scan);
+      painter.setRenderHint(QPainter::SmoothPixmapTransform);
+      painter.setRenderHint(QPainter::Antialiasing);
+      painter.translate(330, 230);
+      painter.rotate(0.15);
+      // The seam: darkest against the print, fading out, and deeper at one end.
+      for (int i = 0; i < 6; ++i) {
+        const int grey = 60 + i * 28;
+        painter.fillRect(QRectF(-300, 200 + i, 600, 1), QColor(grey, grey, grey + 2));
+      }
+      painter.fillRect(QRectF(0, 206, 300, 2), QColor(200, 200, 202));
+      painter.drawImage(-300, -200, photo);
+    }
+    const QImage cropped = TouchUp::apply(scan, TouchUp::SmartCrop);
+    QVERIFY2(cropped.width() >= 570 && cropped.height() >= 370,
+             qPrintable(QStringLiteral("%1x%2").arg(cropped.width()).arg(cropped.height())));
+
+    // No band of backing or seam survives along any edge: what is left on
+    // each outermost line is the picture, not grey.
+    const auto grey = [](QRgb p) {
+      return std::max({qRed(p), qGreen(p), qBlue(p)}) - std::min({qRed(p), qGreen(p), qBlue(p)}) <= 12;
+    };
+    const auto share = [&](bool row, int at) {
+      const int n = row ? cropped.width() : cropped.height();
+      int count = 0;
+      for (int i = 0; i < n; ++i) {
+        if (grey(row ? cropped.pixel(i, at) : cropped.pixel(at, i))) ++count;
+      }
+      return double(count) / n;
+    };
+    for (const auto& [row, at] : {std::pair{true, 0}, std::pair{true, cropped.height() - 1},
+                                  std::pair{false, 0}, std::pair{false, cropped.width() - 1}}) {
+      const double s = share(row, at);
+      QVERIFY2(s < 0.1, qPrintable(QStringLiteral("%1 %2: %3").arg(row ? "row" : "column").arg(at).arg(s)));
+    }
+  }
+
   void touchUpSmartCropLeavesBorderlessAndSkyAlone() {
     const QImage photo = touchUpPhoto(320, 240);
     QCOMPARE(TouchUp::detectBorder(photo), QRectF(0, 0, 1, 1));
