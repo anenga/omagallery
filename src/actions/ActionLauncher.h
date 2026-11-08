@@ -46,6 +46,9 @@ public:
 
   // Ordinary Delete uses recoverable XDG Trash.
   Q_INVOKABLE bool moveToTrash(const QString& path);
+  // Why |path| cannot go to Trash (a read-only folder, a missing file), or
+  // empty, so a prompt is not offered for a move that cannot happen.
+  Q_INVOKABLE QString trashProblem(const QString& path) const;
   Q_INVOKABLE QVariantMap captureFileAction(const QString& path,
                                             const QString& expectedMediaPath = {});
   Q_INVOKABLE bool moveCapturedToTrash(const QVariantMap& target);
@@ -57,6 +60,13 @@ public:
   Q_INVOKABLE QVariantMap capturePermanentDelete(const QString& path,
                                                  const QString& expectedMediaPath = {});
   Q_INVOKABLE bool deleteCapturedPermanently(const QVariantMap& target);
+  // A whole folder, permanently, asked for from the sidebar. The summary is
+  // {ok, name, files, folders, more, error}: whether it may be deleted (never
+  // the home folder, a standard folder like Pictures, or a link), and what
+  // is in it, for the confirm. The delete runs off the GUI thread and ends
+  // with folderDeleted().
+  Q_INVOKABLE QVariantMap folderDeleteSummary(const QString& path) const;
+  Q_INVOKABLE void deleteFolderPermanently(const QString& path);
 
   // Rename in place without letting the user accidentally change the media
   // extension or overwrite another file. The map contains ok, path, fileName,
@@ -121,6 +131,7 @@ signals:
   // Something the user should be told about, in their words rather than a
   // process exit code.
   void failed(const QString& message);
+  void folderDeleted(const QString& path, bool ok, const QString& message);
   // Something worth confirming happened, for the same status line.
   void reported(const QString& message);
   // A tracked run started writing this path; the library holds it back.

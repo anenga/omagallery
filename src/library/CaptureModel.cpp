@@ -463,7 +463,16 @@ void CaptureModel::readPicture(const QString& path) {
     }
     const QString version = FileVersion::key(path);
     const ImageBudget::Plan plan = ImageBudget::plan(ImageBudget::estimate(path), edge);
-    if (!plan.reduced) return picture;
+    if (!plan.reduced) {
+      // The version keeps the image cache from showing a picture that was
+      // since saved over in place.
+      if (!version.isEmpty()) {
+        QUrl versioned = source;
+        versioned.setQuery(QStringLiteral("omaroll=") + version);
+        picture.insert(QStringLiteral("source"), versioned);
+      }
+      return picture;
+    }
     // Nothing to load when not even the reduced copy can be decoded.
     // Areas show the detail, so the copy only needs the screen's size.
     const int copyEdge = plan.edge > 0 && !plan.areas ? plan.edge : edge;

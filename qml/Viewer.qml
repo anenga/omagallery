@@ -44,7 +44,8 @@ ApplicationWindow {
     property bool infoOpen: false
     property bool slideshowRunning: false
     readonly property bool blockingActionOpen: actionMenu.visible || confirm.visible
-                                              || permanentConfirm.visible || editorChooser.visible || shortcutHelp.visible
+                                              || permanentConfirm.visible || replaceConfirm.visible
+                                              || editorChooser.visible || shortcutHelp.visible
     onBlockingActionOpenChanged: {
         if (root.blockingActionOpen) slideshowTimer.stop()
         else Qt.callLater(root.resumeSlideshow)
@@ -176,6 +177,7 @@ ApplicationWindow {
     readonly property bool chromeShown: root.chromePinned || root.pointerActive || root.infoOpen
                                         || shortcutHelp.visible
                                         || actionMenu.visible || confirm.visible || permanentConfirm.visible || editorChooser.visible
+                                        || replaceConfirm.visible
                                         || header.hovered || transport.hovered
                                         || previousButton.hovered || nextButton.hovered
                                         || toolbar.hovered || filmstrip.hovered
@@ -387,6 +389,59 @@ ApplicationWindow {
             root.fitToWindow()
         } else {
             root.showActualSize()
+        }
+    }
+
+    // Saves the on-screen turn as a corrected copy beside the original
+    // (losslessly for a plain JPEG); the original is never changed.
+    property int rotationSaveJob: -1
+    property bool rotationReplacing: false
+    readonly property bool canSaveRotation: !Session.isVideo && !Session.isRaw
+                                            && root.viewRotation !== 0 && Session.path !== ""
+    // |replace| puts the turned picture in the original's place, with the
+    // original moved to the Trash.
+    function saveRotation(replace) {
+        if (!root.canSaveRotation || ViewerEdit.busy || root.rotationSaveJob >= 0) return
+        root.rotationReplacing = replace === true
+        root.rotationSaveJob = ViewerEdit.nextJobId()
+        const turns = Math.round(root.viewRotation / 90) % 4
+        if (root.rotationReplacing) {
+            ViewerEdit.replaceWithTurn(Session.path, turns, false, false, root.rotationSaveJob)
+        } else {
+            ViewerEdit.saveCopy(Session.path, turns, false, false, 0, 0, 0, 1, 1, 0, 0,
+                                root.rotationSaveJob)
+        }
+    }
+    // Saving over the original asks first, unless the user said not to.
+    function askToReplace() {
+        if (!root.canSaveRotation || ViewerEdit.busy || root.rotationSaveJob >= 0) return
+        if (!Settings.confirmReplace) {
+            root.saveRotation(true)
+            return
+        }
+        const path = Session.path
+        replaceConfirm.path = path
+        replaceConfirm.title = "Save over " + path.substring(path.lastIndexOf("/") + 1) + "?"
+        replaceConfirm.open()
+    }
+    Connections {
+        target: ViewerEdit
+        function onSaved(outputPath, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
+            if (root.rotationReplacing) {
+                // The file itself is turned now.
+                root.viewRotation = 0
+                root.say("Saved " + name + "; the original is in the Trash")
+            } else {
+                root.say("Saved " + name)
+            }
+        }
+        function onFailed(message, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            root.say(message)
         }
     }
 
@@ -680,10 +735,24 @@ ApplicationWindow {
             return
         }
         if (confirm.visible || permanentConfirm.visible || editorChooser.visible) return
+        const problem = Actions.trashProblem(Session.deletionPath)
+        if (problem !== "") {
+            root.say(problem)
+            return
+        }
         confirm.path = Session.deletionPath
         confirm.viewedPath = Session.path
         confirm.detail = confirm.path
-        confirm.open()
+        if (Settings.confirmTrash) confirm.open()
+        else root.movePendingToTrash()
+    }
+
+    function movePendingToTrash() {
+        if (confirm.path !== "" && Actions.moveToTrash(confirm.path)) {
+            Session.forget(confirm.viewedPath)
+            root.say("Moved to Trash")
+        }
+        confirm.path = ""
     }
 
     function requestPermanentDelete() {
@@ -988,6 +1057,7 @@ ApplicationWindow {
         root.infoOpen = false
         confirm.close()
         permanentConfirm.close()
+        replaceConfirm.close()
         actionMenu.close()
         shortcutHelp.close()
         Session.clear()
@@ -1484,7 +1554,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 acceptedButtons: Qt.BackButton | Qt.ForwardButton
                 enabled: Session.count > 1 && !actionMenu.visible && !confirm.visible && !permanentConfirm.visible
-                         && !editorChooser.visible
+                         && !replaceConfirm.visible && !editorChooser.visible
                 onClicked: function (mouse) {
                     root.step(mouse.button === Qt.BackButton ? -1 : 1)
                 }
@@ -1721,6 +1791,12 @@ ApplicationWindow {
             onSlideshow: root.setSlideshow(!root.slideshowRunning)
             onRotateLeft: root.rotate(false)
             onRotateRight: root.rotate(true)
+            rotated: root.canSaveRotation
+            savingRotation: root.rotationSaveJob >= 0
+            onSaveRotation: root.saveRotation(false)
+            onReplaceRotation: root.askToReplace()
+            canReplace: root.canSaveRotation && ViewerEdit.canReplace(Session.path)
+            replacingRotation: root.rotationReplacing
             onTrash: root.requestTrash()
         }
 
@@ -1992,12 +2068,26 @@ ApplicationWindow {
         property string viewedPath: ""
         title: "Move this item to Trash?"
         confirmLabel: "Move to Trash"
+        checkLabel: "Don't ask me again"
         onAccepted: {
-            if (confirm.path !== "" && Actions.moveToTrash(confirm.path)) {
-                Session.forget(confirm.viewedPath)
-                root.say("Moved to Trash")
-            }
-            confirm.path = ""
+            if (confirm.checked) Settings.confirmTrash = false
+            root.movePendingToTrash()
+        }
+        onVisibleChanged: if (!visible) keys.forceActiveFocus()
+    }
+
+    ConfirmSheet {
+        id: replaceConfirm
+        objectName: "viewerReplaceConfirm"
+        property string path: ""
+        detail: "The rotated picture takes its place. The original goes to the Trash, where you can still restore it."
+        confirmLabel: "Save"
+        checkLabel: "Don't ask me again"
+        onAccepted: {
+            if (replaceConfirm.checked) Settings.confirmReplace = false
+            // Only the picture that was asked about.
+            if (replaceConfirm.path === Session.path) root.saveRotation(true)
+            replaceConfirm.path = ""
         }
         onVisibleChanged: if (!visible) keys.forceActiveFocus()
     }

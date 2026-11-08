@@ -40,6 +40,9 @@ ApplicationWindow {
     // move the selection under a modal, and trashing the wrong file is
     // unforgivable.
     property var pendingDeleteTarget: ({})
+    // The next Trash prompt is shown even with "Don't ask me again" set,
+    // because it asks a real question (which exact copy to keep).
+    property bool trashAlwaysAsks: false
     property var pendingDuplicateKeep: ({})
     property var pendingDeleteBatch: []
     // While a collection rename is in flight the old name is gone from the
@@ -54,8 +57,11 @@ ApplicationWindow {
     // under an open sheet is disabled outright: pointer handlers take passive
     // grabs, so a scrim alone does not stop a tap on a sheet's control from
     // also reaching the tile, pill or viewer button under it.
-    readonly property bool modalOpen: confirm.visible || permanentConfirm.visible || matteSheet.visible
+    readonly property bool modalOpen: confirm.visible || permanentConfirm.visible || replaceConfirm.visible
+                                      || folderDeleteConfirm.visible
+                                      || matteSheet.visible
                                       || correctionSheet.visible
+                                      || touchUpSheet.visible
                                       || batchSheet.visible
                                       || compareSheet.visible
                                       || libraryBrowser.visible || settingsSheet.visible
@@ -84,6 +90,17 @@ ApplicationWindow {
 
     function organizationStatus(message) {
         root.say(Settings.organizationError || message)
+    }
+
+    // Saving over |path| asks first, unless the user said not to.
+    function askToReplace(path, proceed) {
+        if (!Settings.confirmReplace) {
+            proceed()
+            return
+        }
+        replaceConfirm.proceed = proceed
+        replaceConfirm.title = "Save over " + path.substring(path.lastIndexOf("/") + 1) + "?"
+        replaceConfirm.open()
     }
 
     function restoreFocusAfterSheet() {
@@ -204,6 +221,9 @@ ApplicationWindow {
         case "corrections":
             correctionSheet.open(path, path.substring(path.lastIndexOf("/") + 1))
             return
+        case "touchup":
+            touchUpSheet.open(path, path.substring(path.lastIndexOf("/") + 1))
+            return
         case "correctionsbatch": {
             const checked = targetPaths !== undefined ? targetPaths
                             : library.checkedCount > 1 ? library.checkedPaths() : []
@@ -298,7 +318,11 @@ ApplicationWindow {
     }
 
     function dismissTopLayer() {
-        if (confirm.visible) {
+        if (folderDeleteConfirm.visible) {
+            folderDeleteConfirm.close()
+        } else if (replaceConfirm.visible) {
+            replaceConfirm.close()
+        } else if (confirm.visible) {
             confirm.close()
         } else if (permanentConfirm.visible) {
             permanentConfirm.close()
@@ -320,6 +344,8 @@ ApplicationWindow {
             matteSheet.close()
         } else if (correctionSheet.visible) {
             correctionSheet.close()
+        } else if (touchUpSheet.visible) {
+            touchUpSheet.close()
         } else if (batchSheet.visible) {
             batchSheet.close()
         } else if (compareSheet.visible) {
@@ -607,12 +633,27 @@ ApplicationWindow {
         if (path === "") return
         const target = root.captureTrashTarget(path)
         if (target.path === undefined) return
+        // Say so now, rather than after a prompt for a move that cannot work.
+        const problem = Actions.trashProblem(target.path)
+        if (problem !== "") {
+            root.say(problem)
+            return
+        }
         root.pendingDeleteTarget = target
         root.pendingDeleteBatch = []
         root.pendingDuplicateKeep = ({})
         confirm.title = "Move this item to Trash?"
         confirm.detail = target.path
-        confirm.open()
+        root.openTrashConfirm()
+    }
+
+    // Asks before moving to Trash, unless the user said not to.
+    function openTrashConfirm() {
+        const ask = root.trashAlwaysAsks || Settings.confirmTrash
+        confirm.checkLabel = root.trashAlwaysAsks ? "" : "Don't ask me again"
+        root.trashAlwaysAsks = false
+        if (ask) confirm.open()
+        else root.movePendingToTrash()
     }
 
     function requestDeleteBatch(paths, title, detail) {
@@ -621,6 +662,11 @@ ApplicationWindow {
         for (const path of paths) {
             const target = root.captureTrashTarget(path)
             if (target.path === undefined) return
+            const problem = Actions.trashProblem(target.path)
+            if (problem !== "") {
+                root.say(paths.length > 1 ? problem + "; nothing was moved" : problem)
+                return
+            }
             targets.push(target)
         }
         root.pendingDeleteTarget = ({})
@@ -631,7 +677,7 @@ ApplicationWindow {
         confirm.detail = detail === undefined
                          ? paths.length + " files. They stay recoverable from your file manager."
                          : detail
-        confirm.open()
+        root.openTrashConfirm()
     }
 
     function requestPermanentDelete(paths) {
@@ -660,6 +706,33 @@ ApplicationWindow {
                                  + (targets.length === 1 ? targets[0].path : names.join("\n")
                                     + (targets.length > 3 ? "\nand " + (targets.length - 3) + " more selected files" : ""))
         permanentConfirm.open()
+    }
+
+    // A whole folder from the sidebar, permanently. Shows its name and what
+    // is in it, because nothing can bring it back.
+    function requestFolderDelete(path) {
+        const summary = Actions.folderDeleteSummary(path)
+        if (!summary.ok) {
+            root.say(summary.error)
+            return
+        }
+        if (!Settings.confirmFolderDelete) {
+            root.deleteFolder(path)
+            return
+        }
+        const plural = function (n, word) { return n + " " + word + (n === 1 ? "" : "s") }
+        const contents = summary.files === 0 && summary.folders === 0 ? "It is empty."
+            : "It holds " + (summary.more ? "more than " : "") + plural(summary.files, "file")
+              + (summary.folders > 0 ? " and " + plural(summary.folders, "folder") : "") + "."
+        folderDeleteConfirm.path = path
+        folderDeleteConfirm.title = "Permanently delete \u201c" + summary.name + "\u201d?"
+        folderDeleteConfirm.detail = contents + " This skips Trash and cannot be undone.\n\n" + path
+        folderDeleteConfirm.open()
+    }
+
+    function deleteFolder(path) {
+        root.say("Deleting " + path.substring(path.lastIndexOf("/") + 1) + "…")
+        Actions.deleteFolderPermanently(path)
     }
 
     function deletePermanently(paths) {
@@ -693,10 +766,12 @@ ApplicationWindow {
         const keep = root.captureTrashTarget(path)
         if (keep.path === undefined) return
         const name = path.substring(path.lastIndexOf("/") + 1)
+        root.trashAlwaysAsks = true
         root.requestDeleteBatch(others,
                                 "Keep " + name + " and trash " + others.length
                                 + (others.length === 1 ? " copy?" : " copies?"),
                                 "Only byte-for-byte identical copies are moved. They remain recoverable from your file manager.")
+        root.trashAlwaysAsks = false
         if (confirm.visible) root.pendingDuplicateKeep = keep
     }
 
@@ -1075,6 +1150,7 @@ ApplicationWindow {
         onAddFolderRequested: libraryBrowser.addFolder()
         onGridFocusRequested: library.forceActiveFocus()
         onMessage: function(text) { root.say(text) }
+        onDeleteFolderRequested: function(path) { root.requestFolderDelete(path) }
         onVisibleChanged: if (!visible && activeFocus) library.forceActiveFocus()
     }
 
@@ -1507,6 +1583,7 @@ ApplicationWindow {
             root.organizationStatus(text !== "" ? "Caption saved" : "Caption removed")
         }
         onStatusRequested: function (message) { root.say(message) }
+        onReplaceRequested: root.askToReplace(detail.path, function () { detail.saveViewTransform(true) })
         objectName: "detail"
         selectionLabel: root.viewerPaths.indexOf(detail.path) < 0 ? ""
                         : (root.viewerPaths.indexOf(detail.path) + 1)
@@ -1598,6 +1675,18 @@ ApplicationWindow {
         id: correctionSheet
         objectName: "correctionSheet"
         onCopied: root.say("Region copied to the clipboard")
+        onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
+    }
+
+    TouchUpSheet {
+        id: touchUpSheet
+        objectName: "touchUpSheet"
+        onReplaceRequested: root.askToReplace(touchUpSheet.path, function () { touchUpSheet.save(true) })
+        onSaved: function (outputPath, replaced) {
+            const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
+            if (replaced && detail.visible && detail.path === outputPath) detail.reloadPicture()
+            root.say(replaced ? "Saved " + name + "; the original is in the Trash" : "Saved " + name)
+        }
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
     }
 
@@ -1699,35 +1788,40 @@ ApplicationWindow {
         objectName: "confirm"
         confirmLabel: "Move to Trash"
         onAccepted: {
-            if (root.pendingDuplicateKeep.path !== undefined) {
-                Actions.moveDuplicateCopiesToTrash(root.pendingDuplicateKeep, root.pendingDeleteBatch)
-                root.say("Checking exact copies before moving them")
-            } else if (root.pendingDeleteBatch.length > 0) {
-                let moved = 0
-                const failed = []
-                for (const target of root.pendingDeleteBatch) {
-                    if (Actions.moveCapturedToTrash(target)) moved++
-                    else failed.push(target.viewedPath)
-                }
-                if (moved > 0) {
-                    root.say(moved === root.pendingDeleteBatch.length
-                             ? "Moved " + moved + (moved === 1 ? " item" : " items") + " to Trash"
-                             : "Moved " + moved + " of " + root.pendingDeleteBatch.length + " items to Trash")
-                }
-                library.clearChecked()
-                for (const path of failed) library.toggleChecked(path)
-                if (failed.length > 0) root.say("Moved " + moved + " of " + root.pendingDeleteBatch.length
-                                              + " items to Trash; " + failed.length + " could not be moved")
-                Library.refresh()
-            } else if (Actions.moveCapturedToTrash(root.pendingDeleteTarget)) {
-                root.say("Moved to Trash")
-                Library.refresh()
-            }
-            root.pendingDeleteTarget = ({})
-            root.pendingDeleteBatch = []
-            root.pendingDuplicateKeep = ({})
+            if (confirm.checked && confirm.checkLabel !== "") Settings.confirmTrash = false
+            root.movePendingToTrash()
         }
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
+    }
+
+    function movePendingToTrash() {
+        if (root.pendingDuplicateKeep.path !== undefined) {
+            Actions.moveDuplicateCopiesToTrash(root.pendingDuplicateKeep, root.pendingDeleteBatch)
+            root.say("Checking exact copies before moving them")
+        } else if (root.pendingDeleteBatch.length > 0) {
+            let moved = 0
+            const failed = []
+            for (const target of root.pendingDeleteBatch) {
+                if (Actions.moveCapturedToTrash(target)) moved++
+                else failed.push(target.viewedPath)
+            }
+            if (moved > 0) {
+                root.say(moved === root.pendingDeleteBatch.length
+                         ? "Moved " + moved + (moved === 1 ? " item" : " items") + " to Trash"
+                         : "Moved " + moved + " of " + root.pendingDeleteBatch.length + " items to Trash")
+            }
+            library.clearChecked()
+            for (const path of failed) library.toggleChecked(path)
+            if (failed.length > 0) root.say("Moved " + moved + " of " + root.pendingDeleteBatch.length
+                                          + " items to Trash; " + failed.length + " could not be moved")
+            Library.refresh()
+        } else if (Actions.moveCapturedToTrash(root.pendingDeleteTarget)) {
+            root.say("Moved to Trash")
+            Library.refresh()
+        }
+        root.pendingDeleteTarget = ({})
+        root.pendingDeleteBatch = []
+        root.pendingDuplicateKeep = ({})
     }
 
     ConfirmSheet {
@@ -1741,6 +1835,42 @@ ApplicationWindow {
             root.deletePermanently(targets)
         }
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
+    }
+
+    ConfirmSheet {
+        id: folderDeleteConfirm
+        objectName: "folderDeleteConfirm"
+        property string path: ""
+        confirmLabel: "Delete permanently"
+        checkLabel: "Don't ask me again"
+        onAccepted: {
+            if (folderDeleteConfirm.checked) Settings.confirmFolderDelete = false
+            const path = folderDeleteConfirm.path
+            folderDeleteConfirm.path = ""
+            if (path !== "") root.deleteFolder(path)
+        }
+        onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
+    }
+
+    // Save in place of the original, from the detail view or Touch up.
+    ConfirmSheet {
+        id: replaceConfirm
+        objectName: "replaceConfirm"
+        property var proceed: null
+        detail: "The edited picture takes its place. The original goes to the Trash, where you can still restore it."
+        confirmLabel: "Save"
+        checkLabel: "Don't ask me again"
+        onAccepted: {
+            const proceed = replaceConfirm.proceed
+            replaceConfirm.proceed = null
+            if (replaceConfirm.checked) Settings.confirmReplace = false
+            if (proceed) proceed()
+        }
+        onVisibleChanged: {
+            if (visible) return
+            if (touchUpSheet.visible) Qt.callLater(touchUpSheet.forceActiveFocus)
+            else root.restoreFocusAfterSheet()
+        }
     }
 
     // Transient status line, so a result or a missing handler is reported where
@@ -1765,6 +1895,13 @@ ApplicationWindow {
         }
         function onFailed(message) { root.say(message) }
         function onReported(message) { root.say(message) }
+        function onFolderDeleted(path, ok, message) {
+            root.say(message)
+            const filter = Captures.folderFilter
+            if (filter === path || filter.startsWith(path + "/")) Captures.folderFilter = ""
+            if (Settings.isFolderPinned(path)) Settings.unpinFolder(path)
+            Library.refresh()
+        }
         // A finished transcode lands next to its source, not at the top, so
         // show where it went: select it once the rescan brings it in.
         function onOutputSettled(path, saved) {
@@ -1784,9 +1921,19 @@ ApplicationWindow {
     Connections {
         target: ImageEdit
         function onSaved(outputPath, jobId) {
+            // A picture saved over in place is already in the library, and
+            // its sheet says what happened.
+            if (outputPath === detail.path || outputPath === touchUpSheet.path) {
+                Library.refresh()
+                return
+            }
             Library.addExtraFiles([outputPath])
             Library.refresh()
             root.say("Saved a corrected copy beside the original")
+        }
+        function onCopyKept(outputPath, jobId) {
+            Library.addExtraFiles([outputPath])
+            Library.refresh()
         }
         function onBatchFinished(succeeded, failed, results, jobId) {
             const outputs = []
@@ -1828,6 +1975,11 @@ ApplicationWindow {
         sequences: [Registry.shortcutFor("corrections")]
         enabled: !root.anySheetOpen && !root.popupOpen
         onActivated: root.perform("corrections", root.currentPath())
+    }
+    Shortcut {
+        sequences: [Registry.shortcutFor("touchup")]
+        enabled: !root.anySheetOpen && !root.popupOpen
+        onActivated: root.perform("touchup", root.currentPath())
     }
     Shortcut {
         sequences: [Registry.shortcutFor("correctionsbatch")]

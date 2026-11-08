@@ -759,6 +759,88 @@ private slots:
     QTRY_VERIFY(!object->property("thumbnailFailed").toBool());
   }
 
+  void trashOnAShareWithoutTrashStillLeavesTheGallery() {
+    // A network share has no Trash; the picture goes to the home Trash by a
+    // copy, and leaves the gallery the same as a local move.
+    QTemporaryDir share;
+    QTemporaryDir home;
+    const QString path = share.filePath(QStringLiteral("share-trash.png"));
+    QImage image(30, 20, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    QVERIFY(image.save(path));
+    m_disposablePaths.append(path);
+    const QByteArray previous = qgetenv("OMAROLL_HOME_TRASH");
+    const bool asked = m_settings->confirmTrash();
+    const auto cleanup = qScopeGuard([&] {
+      if (previous.isEmpty()) qunsetenv("OMAROLL_HOME_TRASH");
+      else qputenv("OMAROLL_HOME_TRASH", previous);
+      m_settings->setConfirmTrash(asked);
+      invoke("dismissTopLayer");
+      m_captures->refresh();
+      QTRY_VERIFY(!m_captures->scanning());
+    });
+    qputenv("OMAROLL_HOME_TRASH", home.path().toLocal8Bit());
+    m_settings->setConfirmTrash(true);
+    m_captures->addExtraFiles({path});
+    QTRY_VERIFY(m_library->rowOf(path) >= 0);
+
+    QVERIFY(QMetaObject::invokeMethod(m_window, "requestDelete", Q_ARG(QVariant, path)));
+    QTRY_VERIFY(item("confirm")->isVisible());
+    QTest::keyClick(m_window, Qt::Key_Return);
+    QTRY_VERIFY(!item("confirm")->isVisible());
+    QTRY_VERIFY(!QFileInfo::exists(path));
+    QVERIFY(QFileInfo::exists(home.filePath(QStringLiteral("files/share-trash.png"))));
+    QTRY_VERIFY_WITH_TIMEOUT(m_captures->rowOf(path) < 0, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(m_library->rowOf(path) < 0, 10000);
+  }
+
+  void aFolderCanBeDeletedPermanentlyFromTheSidebar() {
+    // Never the home folder or a standard one, whatever is asked.
+    QVERIFY(!m_actions->folderDeleteSummary(QDir::homePath()).value(QStringLiteral("ok")).toBool());
+    QVERIFY(!m_actions->folderDeleteSummary(QStringLiteral("/")).value(QStringLiteral("ok")).toBool());
+
+    QTemporaryDir parent;
+    const QString folder = parent.filePath(QStringLiteral("Old scans"));
+    QVERIFY(QDir().mkpath(folder + QStringLiteral("/inner")));
+    QImage image(30, 20, QImage::Format_RGB32);
+    image.fill(Qt::yellow);
+    const QStringList files{folder + QStringLiteral("/a.png"), folder + QStringLiteral("/inner/b.png")};
+    for (const QString& path : files) {
+      QVERIFY(image.save(path));
+      m_disposablePaths.append(path);
+    }
+    const bool asked = m_settings->confirmFolderDelete();
+    const auto cleanup = qScopeGuard([&] {
+      m_settings->setConfirmFolderDelete(asked);
+      invoke("dismissTopLayer");
+      m_captures->refresh();
+      QTRY_VERIFY(!m_captures->scanning());
+    });
+    m_settings->setConfirmFolderDelete(true);
+    m_captures->addExtraFiles(files);
+    QTRY_VERIFY(m_library->rowOf(files.at(0)) >= 0 && m_library->rowOf(files.at(1)) >= 0);
+
+    const QVariantMap summary = m_actions->folderDeleteSummary(folder);
+    QVERIFY(summary.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(summary.value(QStringLiteral("files")).toInt(), 2);
+    QCOMPARE(summary.value(QStringLiteral("folders")).toInt(), 1);
+
+    // The prompt names the folder and what it holds; "Don't ask me again"
+    // turns it off.
+    QVERIFY(QMetaObject::invokeMethod(m_window, "requestFolderDelete", Q_ARG(QVariant, folder)));
+    QQuickItem* confirm = item("folderDeleteConfirm");
+    QTRY_VERIFY(confirm->isVisible());
+    QVERIFY(confirm->property("title").toString().contains(QStringLiteral("Old scans")));
+    QVERIFY(confirm->property("detail").toString().contains(QStringLiteral("2 files and 1 folder")));
+    QVERIFY(QDir(folder).exists());
+    confirm->setProperty("checked", true);
+    QTest::keyClick(m_window, Qt::Key_Return);
+    QTRY_VERIFY(!confirm->isVisible());
+    QTRY_VERIFY(!QDir(folder).exists());
+    QVERIFY(!m_settings->confirmFolderDelete());
+    for (const QString& path : files) QTRY_VERIFY_WITH_TIMEOUT(m_captures->rowOf(path) < 0, 10000);
+  }
+
   void failedTrashTargetsRemainChecked() {
     QTemporaryDir dir;
     const QString good = dir.filePath(QStringLiteral("trash-good.png"));
