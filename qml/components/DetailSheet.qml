@@ -490,15 +490,23 @@ Item {
     readonly property bool viewTransformed: imageRotation !== 0 || imageFlipHorizontal
                                             || imageFlipVertical
     property int rotationSaveJob: -1
-    function saveViewTransform() {
+    property bool rotationReplacing: false
+    // |replace| puts the turned picture in the original's place, with the
+    // original moved to the Trash; otherwise a copy is saved beside it.
+    function saveViewTransform(replace) {
         if (!root.viewTransformed || ImageEdit.busy || root.rotationSaveJob >= 0) return
         const turns = Math.round(root.imageRotation / 90) % 4
         const odd = turns % 2 === 1
+        const flipH = odd ? root.imageFlipVertical : root.imageFlipHorizontal
+        const flipV = odd ? root.imageFlipHorizontal : root.imageFlipVertical
+        root.rotationReplacing = replace === true
         root.rotationSaveJob = ImageEdit.nextJobId()
-        ImageEdit.saveCopy(root.path, turns,
-                           odd ? root.imageFlipVertical : root.imageFlipHorizontal,
-                           odd ? root.imageFlipHorizontal : root.imageFlipVertical,
-                           0, 0, 0, 1, 1, 0, 0, root.rotationSaveJob)
+        if (root.rotationReplacing) {
+            ImageEdit.replaceWithTurn(root.path, turns, flipH, flipV, root.rotationSaveJob)
+        } else {
+            ImageEdit.saveCopy(root.path, turns, flipH, flipV, 0, 0, 0, 1, 1, 0, 0,
+                               root.rotationSaveJob)
+        }
     }
     Connections {
         target: ImageEdit
@@ -506,7 +514,10 @@ Item {
             if (jobId !== root.rotationSaveJob) return
             root.rotationSaveJob = -1
             root.resetImageView()
-            root.statusRequested("Saved " + outputPath.substring(outputPath.lastIndexOf("/") + 1))
+            const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
+            root.statusRequested(root.rotationReplacing
+                                 ? "Replaced " + name + "; the original is in the Trash"
+                                 : "Saved " + name)
         }
         function onFailed(message, jobId) {
             if (jobId !== root.rotationSaveJob) return
@@ -2122,10 +2133,18 @@ Item {
                     objectName: "saveViewTransformButton"
                     visible: root.viewTransformed && !root.isDocument && !root.isVideo
                              && Registry.appliesToKind("corrections", false, false, root.path)
-                    label: root.rotationSaveJob >= 0 ? "Saving…" : "Save"
+                    label: root.rotationSaveJob >= 0 && !root.rotationReplacing ? "Saving…" : "Save copy"
                     toolTip: "Save the rotated picture as a copy"
                     active: true
-                    onClicked: root.saveViewTransform()
+                    onClicked: root.saveViewTransform(false)
+                }
+                PillButton {
+                    objectName: "replaceViewTransformButton"
+                    visible: root.viewTransformed && !root.isDocument && !root.isVideo
+                             && ImageEdit.canReplace(root.path)
+                    label: root.rotationSaveJob >= 0 && root.rotationReplacing ? "Replacing…" : "Replace"
+                    toolTip: "Replace the original with the rotated picture; the original goes to the Trash"
+                    onClicked: root.saveViewTransform(true)
                 }
                 PillButton {
                     // At the minimum window width with details shown, even the

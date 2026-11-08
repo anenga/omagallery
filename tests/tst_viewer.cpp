@@ -1193,6 +1193,31 @@ private slots:
     QCOMPARE(QImageReader(source).size(), original);
   }
 
+  void aRotationCanReplaceTheOriginal() {
+    const QString folder = m_scratch.filePath(QStringLiteral("replace-rotation"));
+    QVERIFY(QDir().mkpath(folder));
+    const QString source = folder + QStringLiteral("/a.jpg");
+    QVERIFY(QFile::copy(media(QStringLiteral("Shot 1.jpg")), source));
+    const QSize original = QImageReader(source).size();
+    QVERIFY(original.isValid() && original.width() != original.height());
+    open({source});
+    QTRY_VERIFY(prop("imageReady").toBool());
+    m_window->setProperty("chromePinned", true);
+    QTRY_VERIFY(item(QStringLiteral("viewerToolbar"))->isVisible());
+
+    QQuickItem* replace = item(QStringLiteral("viewerReplaceRotation"));
+    QVERIFY(!replace->isVisible());
+    click(item(QStringLiteral("viewerRotateRight")));
+    QTRY_VERIFY(replace->isVisible());
+    click(replace);
+
+    // The file itself is turned, under its own name, with no copy beside it,
+    // and the view no longer turns it a second time.
+    QTRY_COMPARE(QImageReader(source).size(), original.transposed());
+    QTRY_COMPARE(prop("viewRotation").toInt(), 0);
+    QVERIFY(!QFileInfo::exists(folder + QStringLiteral("/a-edited.jpg")));
+  }
+
   void theToolbarHasTheCommonPictureControls() {
     const QString folder = m_scratch.filePath(QStringLiteral("toolbar"));
     QVERIFY(QDir().mkpath(folder));

@@ -97,6 +97,22 @@ struct SaveResult {
   QString error;
 };
 
+// Puts |written|, a fresh copy beside |source|, in |source|'s place. The
+// original goes to the Trash rather than being overwritten: these are often
+// scans of prints that exist nowhere else, and the Trash can give one back.
+SaveResult replaceOriginal(const QString& source, const QString& written) {
+  const QString name = QFileInfo(written).fileName();
+  if (!QFile::moveToTrash(source)) {
+    return {written, QStringLiteral("Could not move the original to the Trash; saved as %1 instead")
+                         .arg(name)};
+  }
+  if (!QFile::rename(written, source)) {
+    return {written, QStringLiteral("The original is in the Trash, but the new picture is %1")
+                         .arg(name)};
+  }
+  return {source, {}};
+}
+
 SaveResult saveTransform(const QString& source, const ImageEditor::Transform& transform) {
   if (CameraRaw::isRawFile(source)) return {{}, kRawRefusal};
   QString error;
@@ -324,9 +340,59 @@ void ImageEditor::saveCopy(const QString& path, int quarterTurns, bool flipHoriz
 
 bool ImageEditor::upscalerAvailable() const { return Upscaler::available(); }
 
+bool ImageEditor::canReplace(const QString& path) const {
+  if (path.isEmpty() || CameraRaw::isRawFile(path) || isAnimated(path)) return false;
+  if (!QFileInfo(path).isWritable() || !QFileInfo(QFileInfo(path).absolutePath()).isWritable()) {
+    return false;
+  }
+  const QByteArray format = writableFormat(path);
+  const QByteArray suffix = CaptureScanner::mediaSuffix(path).toLower().toUtf8();
+  return format == suffix || (format == "jpg" && suffix == "jpeg") ||
+         (format == "tiff" && suffix == "tif");
+}
+
+void ImageEditor::replaceWithTurn(const QString& path, int quarterTurns, bool flipHorizontal,
+                                  bool flipVertical, int jobId) {
+  if (m_busy) {
+    emit failed(QStringLiteral("Still saving the last correction"), jobId);
+    return;
+  }
+  if (!QFileInfo::exists(path)) {
+    emit failed(QStringLiteral("That file is no longer there"), jobId);
+    return;
+  }
+  if (!canReplace(path)) {
+    emit failed(QStringLiteral("This picture can only be saved as a copy"), jobId);
+    return;
+  }
+  m_busy = true;
+  emit busyChanged();
+  const QString source = path;
+  (void)QtConcurrent::run([this, source, quarterTurns, flipHorizontal, flipVertical, jobId] {
+    Transform transform;
+    transform.quarterTurns = quarterTurns;
+    transform.flipHorizontal = flipHorizontal;
+    transform.flipVertical = flipVertical;
+    SaveResult result = saveTransform(source, transform);
+    if (result.error.isEmpty()) result = replaceOriginal(source, result.output);
+    const QString output = result.output;
+    const QString error = result.error;
+    QMetaObject::invokeMethod(
+        this,
+        [this, output, error, jobId] {
+          m_busy = false;
+          emit busyChanged();
+          if (!error.isEmpty()) emit failed(error, jobId);
+          else emit saved(output, jobId);
+        },
+        Qt::QueuedConnection);
+  });
+}
+
 QString ImageEditor::upscalerPackage() const { return QString::fromLatin1(Upscaler::kPackage); }
 
-void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor, int jobId) {
+void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor, int jobId,
+                              bool replace) {
   if (m_busy) {
     emit failed(QStringLiteral("Still saving the last correction"), jobId);
     return;
@@ -344,6 +410,10 @@ void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor,
     emit failed(QStringLiteral("Choose a touch-up first"), jobId);
     return;
   }
+  if (replace && !canReplace(path)) {
+    emit failed(QStringLiteral("This picture can only be saved as a copy"), jobId);
+    return;
+  }
   if (factor > 0 && !Upscaler::available()) {
     emit failed(QStringLiteral("Install %1 for AI Uprez").arg(QString::fromLatin1(Upscaler::kPackage)),
                 jobId);
@@ -354,7 +424,7 @@ void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor,
   emit busyChanged();
 
   const QString source = path;
-  (void)QtConcurrent::run([this, source, steps, factor, jobId] {
+  (void)QtConcurrent::run([this, source, steps, factor, jobId, replace] {
     QString output;
     QString error;
     const QImage image = readOriented(source);
@@ -378,6 +448,10 @@ void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor,
         if (output.isEmpty()) {
           error = QStringLiteral("Could not safely save a copy beside %1; check its folder")
                       .arg(QFileInfo(source).fileName());
+        } else if (replace) {
+          const SaveResult replaced = replaceOriginal(source, output);
+          output = replaced.output;
+          error = replaced.error;
         }
       }
     }

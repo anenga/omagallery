@@ -1610,8 +1610,9 @@ ApplicationWindow {
     TouchUpSheet {
         id: touchUpSheet
         objectName: "touchUpSheet"
-        onSaved: function (outputPath) {
-            root.say("Saved " + outputPath.substring(outputPath.lastIndexOf("/") + 1))
+        onSaved: function (outputPath, replaced) {
+            const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
+            root.say(replaced ? "Replaced " + name + "; the original is in the Trash" : "Saved " + name)
         }
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
     }

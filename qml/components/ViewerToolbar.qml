@@ -25,6 +25,9 @@ Rectangle {
     signal rotateLeft()
     signal rotateRight()
     signal saveRotation()
+    signal replaceRotation()
+    property bool canReplace: false
+    property bool replacingRotation: false
     signal trash()
 
     function shade(base, amount) {
@@ -134,10 +137,17 @@ Rectangle {
         IconButton {
             objectName: "viewerSaveRotation"
             visible: root.rotated
-            label: root.savingRotation ? "Saving…" : "Save"
+            label: root.savingRotation && !root.replacingRotation ? "Saving…" : "Save copy"
             active: true
             toolTip: "Save the rotated picture as a copy"
             onClicked: root.saveRotation()
+        }
+        IconButton {
+            objectName: "viewerReplaceRotation"
+            visible: root.rotated && root.canReplace
+            label: root.savingRotation && root.replacingRotation ? "Replacing…" : "Replace"
+            toolTip: "Replace the original with the rotated picture; the original goes to the Trash"
+            onClicked: root.replaceRotation()
         }
         Divider {}
 

@@ -83,8 +83,20 @@ public:
   // flags: Smart Crop, Auto Fix) applied to the EXIF-oriented picture, then,
   // when |upscaleFactor| is 2 or 4, enlarged with Real-ESRGAN. Emits
   // touchUpProgress() while upscaling, then saved() or failed().
+  //
+  // With |replaceOriginal| the result takes the original's place instead:
+  // it is written as a copy first, then the original goes to the Trash (so
+  // it can always be restored) and the copy is renamed to its name. saved()
+  // then carries the original's path.
   Q_INVOKABLE void saveTouchUp(const QString& path, int steps, int upscaleFactor = 0,
-                               int jobId = 0);
+                               int jobId = 0, bool replaceOriginal = false);
+  // The picture turned and flipped (no crop or resize) in the original's
+  // place, the same way: losslessly for a plain JPEG, original to the Trash.
+  Q_INVOKABLE void replaceWithTurn(const QString& path, int quarterTurns, bool flipHorizontal,
+                                   bool flipVertical, int jobId = 0);
+  // Whether |path| can be replaced by a corrected version in its own format:
+  // not a raw, not animated, and a format Qt can write back.
+  Q_INVOKABLE bool canReplace(const QString& path) const;
   // Whether the Real-ESRGAN command is installed; checked each call, so
   // installing it while Omaroll runs is picked up.
   Q_INVOKABLE bool upscalerAvailable() const;

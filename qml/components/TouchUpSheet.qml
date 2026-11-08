@@ -25,6 +25,10 @@ Item {
     property int jobGeneration: -1
     property string errorText: ""
     property string previewProblem: ""
+    // Whether this file can be replaced in its own format (not a raw, not
+    // animated, writable); otherwise only a copy is offered.
+    property bool replaceable: false
+    property bool replacing: false
 
     // Matches TouchUp::Step in src/edit/TouchUp.h.
     readonly property int steps: (smartCrop ? 1 : 0) | (autoFix ? 2 : 0)
@@ -37,7 +41,9 @@ Item {
                                     && (root.steps !== 0 || root.factor !== 0)
                                     && preview.status === Image.Ready
 
-    signal saved(string outputPath)
+    // |replaced| when the touched-up picture took the original's place and
+    // the original went to the Trash.
+    signal saved(string outputPath, bool replaced)
 
     function shade(base, amount) {
         return Qt.rgba(base.r, base.g, base.b, amount)
@@ -46,6 +52,8 @@ Item {
     function open(filePath, name) {
         jobGeneration = ImageEdit.nextJobId()
         previewProblem = ImageEdit.previewProblem(filePath)
+        replaceable = ImageEdit.canReplace(filePath)
+        replacing = false
         path = filePath
         fileName = name
         smartCrop = true
@@ -65,12 +73,13 @@ Item {
         visible = false
     }
 
-    function save() {
-        if (!root.canSave) return
+    function save(replace) {
+        if (!root.canSave || (replace && !root.replaceable)) return
         saving = true
+        replacing = replace === true
         errorText = ""
         progress = root.factor > 0 ? 0 : -1
-        ImageEdit.saveTouchUp(root.path, root.steps, root.factor, root.jobGeneration)
+        ImageEdit.saveTouchUp(root.path, root.steps, root.factor, root.jobGeneration, root.replacing)
     }
 
     visible: false
@@ -82,7 +91,7 @@ Item {
         function onSaved(outputPath, jobId) {
             if (jobId !== root.jobGeneration || !root.visible) return
             root.saving = false
-            root.saved(outputPath)
+            root.saved(outputPath, root.replacing)
             root.close()
         }
         function onFailed(message, jobId) {
@@ -466,11 +475,19 @@ Item {
                         onClicked: root.close()
                     }
                     PillButton {
+                        objectName: "touchUpReplace"
+                        visible: root.replaceable
+                        label: root.saving && root.replacing ? "Replacing…"
+                               : panel.compact ? "Replace" : "Save & replace"
+                        toolTip: "Replace the original with this; the original goes to the Trash"
+                        onClicked: root.save(true)
+                    }
+                    PillButton {
                         objectName: "touchUpSave"
-                        label: root.saving ? "Saving…" : panel.compact ? "Save" : "Save a copy"
+                        label: root.saving && !root.replacing ? "Saving…" : panel.compact ? "Copy" : "Save a copy"
                         toolTip: "Save a touched-up copy beside the original"
                         active: root.canSave
-                        onClicked: root.save()
+                        onClicked: root.save(false)
                     }
                 }
             }
@@ -482,7 +499,7 @@ Item {
             if (!root.saving) root.close()
             event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            root.save()
+            root.save(false)
             event.accepted = true
         } else if (event.key === Qt.Key_Space && !event.isAutoRepeat) {
             root.showBefore = true

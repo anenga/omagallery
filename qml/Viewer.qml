@@ -393,20 +393,36 @@ ApplicationWindow {
     // Saves the on-screen turn as a corrected copy beside the original
     // (losslessly for a plain JPEG); the original is never changed.
     property int rotationSaveJob: -1
+    property bool rotationReplacing: false
     readonly property bool canSaveRotation: !Session.isVideo && !Session.isRaw
                                             && root.viewRotation !== 0 && Session.path !== ""
-    function saveRotation() {
+    // |replace| puts the turned picture in the original's place, with the
+    // original moved to the Trash.
+    function saveRotation(replace) {
         if (!root.canSaveRotation || ViewerEdit.busy || root.rotationSaveJob >= 0) return
+        root.rotationReplacing = replace === true
         root.rotationSaveJob = ViewerEdit.nextJobId()
-        ViewerEdit.saveCopy(Session.path, Math.round(root.viewRotation / 90) % 4, false, false,
-                            0, 0, 0, 1, 1, 0, 0, root.rotationSaveJob)
+        const turns = Math.round(root.viewRotation / 90) % 4
+        if (root.rotationReplacing) {
+            ViewerEdit.replaceWithTurn(Session.path, turns, false, false, root.rotationSaveJob)
+        } else {
+            ViewerEdit.saveCopy(Session.path, turns, false, false, 0, 0, 0, 1, 1, 0, 0,
+                                root.rotationSaveJob)
+        }
     }
     Connections {
         target: ViewerEdit
         function onSaved(outputPath, jobId) {
             if (jobId !== root.rotationSaveJob) return
             root.rotationSaveJob = -1
-            root.say("Saved " + outputPath.substring(outputPath.lastIndexOf("/") + 1))
+            const name = outputPath.substring(outputPath.lastIndexOf("/") + 1)
+            if (root.rotationReplacing) {
+                // The file itself is turned now.
+                root.viewRotation = 0
+                root.say("Replaced " + name + "; the original is in the Trash")
+            } else {
+                root.say("Saved " + name)
+            }
         }
         function onFailed(message, jobId) {
             if (jobId !== root.rotationSaveJob) return
@@ -1748,7 +1764,10 @@ ApplicationWindow {
             onRotateRight: root.rotate(true)
             rotated: root.canSaveRotation
             savingRotation: root.rotationSaveJob >= 0
-            onSaveRotation: root.saveRotation()
+            onSaveRotation: root.saveRotation(false)
+            onReplaceRotation: root.saveRotation(true)
+            canReplace: root.canSaveRotation && ViewerEdit.canReplace(Session.path)
+            replacingRotation: root.rotationReplacing
             onTrash: root.requestTrash()
         }
 
