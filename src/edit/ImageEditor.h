@@ -79,6 +79,17 @@ public:
                             qreal cropWidth, qreal cropHeight, int targetWidth, int targetHeight,
                             int jobId = 0);
 
+  // Writes "<stem>-edited.<ext>" with the one-click touch-ups (TouchUp::Step
+  // flags: Smart Crop, Auto Fix) applied to the EXIF-oriented picture, then,
+  // when |upscaleFactor| is 2 or 4, enlarged with Real-ESRGAN. Emits
+  // touchUpProgress() while upscaling, then saved() or failed().
+  Q_INVOKABLE void saveTouchUp(const QString& path, int steps, int upscaleFactor = 0,
+                               int jobId = 0);
+  // Whether the Real-ESRGAN command is installed; checked each call, so
+  // installing it while Omaroll runs is picked up.
+  Q_INVOKABLE bool upscalerAvailable() const;
+  Q_INVOKABLE QString upscalerPackage() const;
+
   // Copies the selected region (same pipeline, no resize) to the clipboard.
   // Emits copied() or failed(). Nothing is written to disk.
   Q_INVOKABLE void copyRegion(const QString& path, int quarterTurns, bool flipHorizontal,
@@ -114,6 +125,7 @@ signals:
   void failed(const QString& message, int jobId);
   void busyChanged();
   void batchProgress(int done, int total, int jobId);
+  void touchUpProgress(qreal fraction, int jobId);
   void batchFinished(int succeeded, int failed, const QVariantList& results, int jobId);
 
 private:

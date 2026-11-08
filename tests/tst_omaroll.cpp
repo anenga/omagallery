@@ -22,6 +22,7 @@
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
 #include "edit/ImageEditor.h"
+#include "edit/TouchUp.h"
 #include "edit/ClipboardImage.h"
 #include "edit/ClipboardText.h"
 #include "edit/CopyOutput.h"
@@ -6659,7 +6660,7 @@ private slots:
     for (const QString& id :
          {QStringLiteral("annotate"), QStringLiteral("omaframe"), QStringLiteral("ocr"), QStringLiteral("qr"),
           QStringLiteral("edit"), QStringLiteral("view"), QStringLiteral("background"),
-          QStringLiteral("print"), QStringLiteral("corrections"),
+          QStringLiteral("print"), QStringLiteral("corrections"), QStringLiteral("touchup"),
           QStringLiteral("correctionsbatch")}) {
       QVERIFY2(!offered.contains(id), qPrintable(id));
       QVERIFY2(!registry.appliesToKind(id, false, false, raw), qPrintable(id));
@@ -8961,6 +8962,79 @@ private slots:
                                                    MatteComposer::Original, 0.08);
       QVERIFY2(!result.isNull(), qPrintable(QStringLiteral("matte %1 was null").arg(matte)));
     }
+  }
+
+  // --- Touch-ups ---------------------------------------------------------
+
+  // A noisy, colourful "photo" so no line inside it reads as uniform.
+  static QImage touchUpPhoto(int w, int h) {
+    QImage photo(w, h, QImage::Format_RGB32);
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        photo.setPixel(x, y, qRgb((x * 7 + y * 3) % 200 + 30, (x * 13) % 180 + 40,
+                                  (y * 11 + x) % 220 + 20));
+      }
+    }
+    return photo;
+  }
+
+  void touchUpSmartCropFindsScannerBorder() {
+    // A dark scanner backing, then a thin light strip at the print's edge.
+    const QImage photo = touchUpPhoto(400, 300);
+    QImage scan(460, 350, QImage::Format_RGB32);
+    scan.fill(qRgb(18, 18, 20));
+    {
+      QPainter painter(&scan);
+      painter.fillRect(QRect(26, 21, 408, 308), QColor(225, 225, 228));
+      painter.drawImage(30, 25, photo);
+    }
+    const QRectF area = TouchUp::detectBorder(scan);
+    const QRect found(qRound(area.x() * scan.width()), qRound(area.y() * scan.height()),
+                      qRound(area.width() * scan.width()), qRound(area.height() * scan.height()));
+    const QRect expected(30, 25, 400, 300);
+    // All of the border gone, and at most a hair of the picture with it.
+    QVERIFY2(expected.contains(found), qPrintable(QStringLiteral("%1,%2 %3x%4").arg(found.x())
+                 .arg(found.y()).arg(found.width()).arg(found.height())));
+    QVERIFY(found.width() >= 394 && found.height() >= 294);
+
+    const QImage cropped = TouchUp::apply(scan, TouchUp::SmartCrop);
+    QCOMPARE(cropped.size(), found.size());
+  }
+
+  void touchUpSmartCropLeavesBorderlessAndSkyAlone() {
+    const QImage photo = touchUpPhoto(320, 240);
+    QCOMPARE(TouchUp::detectBorder(photo), QRectF(0, 0, 1, 1));
+
+    // A clear blue sky across the top is uniform but not neutral: picture.
+    QImage sky = photo;
+    {
+      QPainter painter(&sky);
+      painter.fillRect(QRect(0, 0, 320, 60), QColor(90, 150, 230));
+    }
+    QCOMPARE(TouchUp::detectBorder(sky), QRectF(0, 0, 1, 1));
+  }
+
+  void touchUpAutoFixStretchesAFadedPrint() {
+    // A faded print: everything squeezed into a grey, warm middle band.
+    QImage faded(200, 100, QImage::Format_RGB32);
+    for (int y = 0; y < 100; ++y) {
+      for (int x = 0; x < 200; ++x) {
+        const int v = 90 + x * 80 / 199;
+        faded.setPixel(x, y, qRgb(std::min(255, v + 20), v, std::max(0, v - 15)));
+      }
+    }
+    const QImage fixed = TouchUp::autoFix(faded);
+    QCOMPARE(fixed.size(), faded.size());
+    const QRgb dark = fixed.pixel(0, 50);
+    const QRgb light = fixed.pixel(199, 50);
+    // Stretched well past the faded band's ends (90..170 grey), but held
+    // short of crushing: a fade is never treated as pure black.
+    QVERIFY2(qGray(dark) < 50, qPrintable(QString::number(qGray(dark))));
+    QVERIFY2(qGray(light) > 225, qPrintable(QString::number(qGray(light))));
+    // The warm cast (red 35 above blue) is reduced, not reversed.
+    const int cast = qRed(light) - qBlue(light);
+    QVERIFY2(cast >= 0 && cast < 35, qPrintable(QString::number(cast)));
+    QVERIFY(TouchUp::autoFix(QImage()).isNull());
   }
 
   // --- Quick image corrections ------------------------------------------

@@ -483,6 +483,38 @@ Item {
         }
     }
 
+    // The view's turn and flips, saved as a corrected copy beside the
+    // original (losslessly for a plain JPEG). The view flips before it turns
+    // and the writer turns before it flips; on a quarter turn a horizontal
+    // flip then reads as a vertical one, so the two swap.
+    readonly property bool viewTransformed: imageRotation !== 0 || imageFlipHorizontal
+                                            || imageFlipVertical
+    property int rotationSaveJob: -1
+    function saveViewTransform() {
+        if (!root.viewTransformed || ImageEdit.busy || root.rotationSaveJob >= 0) return
+        const turns = Math.round(root.imageRotation / 90) % 4
+        const odd = turns % 2 === 1
+        root.rotationSaveJob = ImageEdit.nextJobId()
+        ImageEdit.saveCopy(root.path, turns,
+                           odd ? root.imageFlipVertical : root.imageFlipHorizontal,
+                           odd ? root.imageFlipHorizontal : root.imageFlipVertical,
+                           0, 0, 0, 1, 1, 0, 0, root.rotationSaveJob)
+    }
+    Connections {
+        target: ImageEdit
+        function onSaved(outputPath, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            root.resetImageView()
+            root.statusRequested("Saved " + outputPath.substring(outputPath.lastIndexOf("/") + 1))
+        }
+        function onFailed(message, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            root.statusRequested(message)
+        }
+    }
+
     function rotateImage() {
         imageRotation = (imageRotation + 90) % 360
         imageZoom = 1.0
@@ -919,6 +951,15 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 4
 
+                IconButton {
+                    objectName: "viewerTouchUpButton"
+                    visible: !root.isVideo && !root.isDocument && root.path !== ""
+                             && Registry.appliesToKind("touchup", false, false, root.path)
+                    icon: "sparkles"
+                    toolTip: "Touch up: Smart Crop, Auto Fix"
+                    shortcut: "U"
+                    onClicked: root.actionTriggered("touchup")
+                }
                 IconButton {
                     objectName: "viewerFavouriteButton"
                     icon: root.favorite ? "star-filled" : "star"
@@ -2076,6 +2117,15 @@ Item {
                     shortcut: root.viewerShortcuts.flipVertical.label
                     active: root.imageFlipVertical
                     onClicked: root.imageFlipVertical = !root.imageFlipVertical
+                }
+                PillButton {
+                    objectName: "saveViewTransformButton"
+                    visible: root.viewTransformed && !root.isDocument && !root.isVideo
+                             && Registry.appliesToKind("corrections", false, false, root.path)
+                    label: root.rotationSaveJob >= 0 ? "Saving…" : "Save"
+                    toolTip: "Save the rotated picture as a copy"
+                    active: true
+                    onClicked: root.saveViewTransform()
                 }
                 PillButton {
                     // At the minimum window width with details shown, even the

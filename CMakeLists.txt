@@ -72,6 +72,10 @@ add_library(omaroll_core STATIC
   src/edit/ClipboardText.h
   src/edit/EditProvider.cpp
   src/edit/EditProvider.h
+  src/edit/TouchUp.cpp
+  src/edit/TouchUp.h
+  src/edit/Upscaler.cpp
+  src/edit/Upscaler.h
   src/matte/HueExtractor.cpp
   src/matte/HueExtractor.h
   src/matte/MatteComposer.cpp
@@ -169,6 +173,7 @@ set(OMAROLL_QML_FILES
   qml/components/MatteSheet.qml
   qml/components/CorrectionSheet.qml
   qml/components/BatchCorrectionSheet.qml
+  qml/components/TouchUpSheet.qml
   qml/components/CompareSheet.qml
   qml/components/SettingsSheet.qml
   qml/components/EditorChooser.qml

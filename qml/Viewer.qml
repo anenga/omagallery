@@ -390,6 +390,31 @@ ApplicationWindow {
         }
     }
 
+    // Saves the on-screen turn as a corrected copy beside the original
+    // (losslessly for a plain JPEG); the original is never changed.
+    property int rotationSaveJob: -1
+    readonly property bool canSaveRotation: !Session.isVideo && !Session.isRaw
+                                            && root.viewRotation !== 0 && Session.path !== ""
+    function saveRotation() {
+        if (!root.canSaveRotation || ViewerEdit.busy || root.rotationSaveJob >= 0) return
+        root.rotationSaveJob = ViewerEdit.nextJobId()
+        ViewerEdit.saveCopy(Session.path, Math.round(root.viewRotation / 90) % 4, false, false,
+                            0, 0, 0, 1, 1, 0, 0, root.rotationSaveJob)
+    }
+    Connections {
+        target: ViewerEdit
+        function onSaved(outputPath, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            root.say("Saved " + outputPath.substring(outputPath.lastIndexOf("/") + 1))
+        }
+        function onFailed(message, jobId) {
+            if (jobId !== root.rotationSaveJob) return
+            root.rotationSaveJob = -1
+            root.say(message)
+        }
+    }
+
     function rotate(clockwise) {
         if (Session.isVideo) {
             return
@@ -1721,6 +1746,9 @@ ApplicationWindow {
             onSlideshow: root.setSlideshow(!root.slideshowRunning)
             onRotateLeft: root.rotate(false)
             onRotateRight: root.rotate(true)
+            rotated: root.canSaveRotation
+            savingRotation: root.rotationSaveJob >= 0
+            onSaveRotation: root.saveRotation()
             onTrash: root.requestTrash()
         }
 

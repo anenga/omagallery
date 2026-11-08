@@ -9,6 +9,9 @@ Rectangle {
     property bool fitted: true
     property bool canStep: false
     property bool slideshowRunning: false
+    // The picture is turned on screen; offer to save that as a copy.
+    property bool rotated: false
+    property bool savingRotation: false
     // On a narrow window the zoom group gives way; the wheel and keys still zoom.
     property bool compact: false
     readonly property bool hovered: hover.hovered
@@ -21,6 +24,7 @@ Rectangle {
     signal slideshow()
     signal rotateLeft()
     signal rotateRight()
+    signal saveRotation()
     signal trash()
 
     function shade(base, amount) {
@@ -126,6 +130,14 @@ Rectangle {
             toolTip: "Rotate right"
             shortcut: "R"
             onClicked: root.rotateRight()
+        }
+        IconButton {
+            objectName: "viewerSaveRotation"
+            visible: root.rotated
+            label: root.savingRotation ? "Saving…" : "Save"
+            active: true
+            toolTip: "Save the rotated picture as a copy"
+            onClicked: root.saveRotation()
         }
         Divider {}
 

@@ -189,6 +189,14 @@ QList<ActionRegistry::Definition> ActionRegistry::buildTable() {
        .media = Still,
        .raws = false},
 
+      // Native: one-click fixes for scanned prints (border crop, levels),
+      // saved as a copy like the corrections above.
+      {.id = u"touchup"_s,
+       .label = u"Touch up"_s,
+       .shortcut = u"U"_s,
+       .media = Still,
+       .raws = false},
+
       // Native: the same rotate/flip/resize over a whole selection, each as a
       // copy. QML gathers the checked files.
       {.id = u"correctionsbatch"_s,
@@ -515,7 +523,7 @@ QVariantList ActionRegistry::actionsForKind(bool video, bool document,
         && (video || document || (!mime.isEmpty() && mime != u"image/png"_s && mime != u"image/jpeg"_s))
         ? u"Copy file"_s : definition.label;
     const QStringList common = {u"copy"_s, u"files"_s, u"open-with"_s, u"print"_s, u"open-document"_s};
-    const QStringList editing = {u"omaframe"_s, u"corrections"_s, u"correctionsbatch"_s,
+    const QStringList editing = {u"omaframe"_s, u"corrections"_s, u"touchup"_s, u"correctionsbatch"_s,
         u"matte"_s, u"compare"_s, u"export"_s, u"trim"_s, u"frame"_s};
     const QStringList organization = {u"rename"_s, u"favorite"_s, u"hide"_s, u"trash"_s};
     row[u"group"_s] = common.contains(definition.id) ? u"File"_s

@@ -56,6 +56,7 @@ ApplicationWindow {
     // also reaching the tile, pill or viewer button under it.
     readonly property bool modalOpen: confirm.visible || permanentConfirm.visible || matteSheet.visible
                                       || correctionSheet.visible
+                                      || touchUpSheet.visible
                                       || batchSheet.visible
                                       || compareSheet.visible
                                       || libraryBrowser.visible || settingsSheet.visible
@@ -204,6 +205,9 @@ ApplicationWindow {
         case "corrections":
             correctionSheet.open(path, path.substring(path.lastIndexOf("/") + 1))
             return
+        case "touchup":
+            touchUpSheet.open(path, path.substring(path.lastIndexOf("/") + 1))
+            return
         case "correctionsbatch": {
             const checked = targetPaths !== undefined ? targetPaths
                             : library.checkedCount > 1 ? library.checkedPaths() : []
@@ -320,6 +324,8 @@ ApplicationWindow {
             matteSheet.close()
         } else if (correctionSheet.visible) {
             correctionSheet.close()
+        } else if (touchUpSheet.visible) {
+            touchUpSheet.close()
         } else if (batchSheet.visible) {
             batchSheet.close()
         } else if (compareSheet.visible) {
@@ -1601,6 +1607,15 @@ ApplicationWindow {
         onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
     }
 
+    TouchUpSheet {
+        id: touchUpSheet
+        objectName: "touchUpSheet"
+        onSaved: function (outputPath) {
+            root.say("Saved " + outputPath.substring(outputPath.lastIndexOf("/") + 1))
+        }
+        onVisibleChanged: if (!visible) root.restoreFocusAfterSheet()
+    }
+
     BatchCorrectionSheet {
         id: batchSheet
         objectName: "batchCorrectionSheet"
@@ -1828,6 +1843,11 @@ ApplicationWindow {
         sequences: [Registry.shortcutFor("corrections")]
         enabled: !root.anySheetOpen && !root.popupOpen
         onActivated: root.perform("corrections", root.currentPath())
+    }
+    Shortcut {
+        sequences: [Registry.shortcutFor("touchup")]
+        enabled: !root.anySheetOpen && !root.popupOpen
+        onActivated: root.perform("touchup", root.currentPath())
     }
     Shortcut {
         sequences: [Registry.shortcutFor("correctionsbatch")]

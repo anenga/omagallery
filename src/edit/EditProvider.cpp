@@ -1,6 +1,7 @@
 #include "edit/EditProvider.h"
 
 #include "edit/ImageEditor.h"
+#include "edit/TouchUp.h"
 #include "sources/DisplayColors.h"
 #include "sources/ImageBudget.h"
 
@@ -22,9 +23,10 @@ constexpr int kFallbackEdge = 720;
 class EditResponse final : public QQuickImageResponse, public QRunnable {
 public:
   EditResponse(QString path, int quarterTurns, bool flipHorizontal, bool flipVertical,
-               qreal straightenDegrees, QSize target)
+               qreal straightenDegrees, int touchUps, QSize target)
       : m_path(std::move(path)), m_quarterTurns(quarterTurns), m_flipH(flipHorizontal),
-        m_flipV(flipVertical), m_straighten(straightenDegrees), m_target(target) {
+        m_flipV(flipVertical), m_straighten(straightenDegrees), m_touchUps(touchUps),
+        m_target(target) {
     setAutoDelete(false);
   }
 
@@ -77,6 +79,12 @@ public:
     transform.flipVertical = m_flipV;
     transform.straightenDegrees = m_straighten;
     QImage preview = ImageEditor::apply(source, transform);
+    // Touch-ups are previewed on the decoded preview itself: the border is
+    // found as fractions, and levels come from the whole picture, so the
+    // result matches the full-size copy.
+    if (!preview.isNull() && m_touchUps != TouchUp::None) {
+      preview = TouchUp::apply(preview, m_touchUps);
+    }
     if (preview.isNull()) {
       m_error = QStringLiteral("Could not preview this image");
       finishOnOwnThread();
@@ -99,6 +107,7 @@ private:
   bool m_flipH = false;
   bool m_flipV = false;
   qreal m_straighten = 0.0;
+  int m_touchUps = TouchUp::None;
   QSize m_target;
   QImage m_image;
   QString m_error;
@@ -122,6 +131,7 @@ QQuickImageResponse* EditProvider::requestImageResponse(const QString& id,
   bool flipH = false;
   bool flipV = false;
   qreal straighten = 0.0;
+  int touchUps = TouchUp::None;
   const QString decoded = QUrl::fromPercentEncoding(id.toUtf8());
   QString path = decoded;
 
@@ -141,6 +151,10 @@ QQuickImageResponse* EditProvider::requestImageResponse(const QString& id,
       // Straighten travels as tenths of a degree, so the id stays integral.
       straighten = head.at(3).toInt() / 10.0;
     }
+    if (head.size() >= 5) {
+      // TouchUp::Step flags, from the touch-up sheet.
+      touchUps = head.at(4).toInt() & (TouchUp::SmartCrop | TouchUp::AutoFix);
+    }
     path = decoded.mid(separator);
   }
 
@@ -149,7 +163,7 @@ QQuickImageResponse* EditProvider::requestImageResponse(const QString& id,
     target = QSize(kFallbackEdge, kFallbackEdge);
   }
 
-  auto* response = new EditResponse(path, quarterTurns, flipH, flipV, straighten, target);
+  auto* response = new EditResponse(path, quarterTurns, flipH, flipV, straighten, touchUps, target);
   m_pool.start(response);
   return response;
 }

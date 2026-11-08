@@ -3,6 +3,8 @@
 #include "edit/ClipboardImage.h"
 #include "edit/CopyOutput.h"
 #include "edit/JpegTransform.h"
+#include "edit/TouchUp.h"
+#include "edit/Upscaler.h"
 #include "sources/CameraRaw.h"
 #include "sources/CaptureScanner.h"
 #include "sources/ImageBudget.h"
@@ -304,6 +306,81 @@ void ImageEditor::saveCopy(const QString& path, int quarterTurns, bool flipHoriz
     transform.targetWidth = targetW;
     transform.targetHeight = targetH;
     const auto [output, error] = saveTransform(source, transform);
+
+    QMetaObject::invokeMethod(
+        this,
+        [this, output, error, jobId] {
+          m_busy = false;
+          emit busyChanged();
+          if (!error.isEmpty()) {
+            emit failed(error, jobId);
+          } else {
+            emit saved(output, jobId);
+          }
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+bool ImageEditor::upscalerAvailable() const { return Upscaler::available(); }
+
+QString ImageEditor::upscalerPackage() const { return QString::fromLatin1(Upscaler::kPackage); }
+
+void ImageEditor::saveTouchUp(const QString& path, int steps, int upscaleFactor, int jobId) {
+  if (m_busy) {
+    emit failed(QStringLiteral("Still saving the last correction"), jobId);
+    return;
+  }
+  if (!QFileInfo::exists(path)) {
+    emit failed(QStringLiteral("That file is no longer there"), jobId);
+    return;
+  }
+  if (CameraRaw::isRawFile(path)) {
+    emit failed(kRawRefusal, jobId);
+    return;
+  }
+  const int factor = upscaleFactor >= 4 ? 4 : upscaleFactor >= 2 ? 2 : 0;
+  if ((steps & (TouchUp::SmartCrop | TouchUp::AutoFix)) == 0 && factor == 0) {
+    emit failed(QStringLiteral("Choose a touch-up first"), jobId);
+    return;
+  }
+  if (factor > 0 && !Upscaler::available()) {
+    emit failed(QStringLiteral("Install %1 for AI Uprez").arg(QString::fromLatin1(Upscaler::kPackage)),
+                jobId);
+    return;
+  }
+
+  m_busy = true;
+  emit busyChanged();
+
+  const QString source = path;
+  (void)QtConcurrent::run([this, source, steps, factor, jobId] {
+    QString output;
+    QString error;
+    const QImage image = readOriented(source);
+    if (image.isNull()) {
+      error = ImageBudget::decodeRefusal(ImageBudget::estimate(source));
+      if (error.isEmpty()) error = QStringLiteral("Could not read %1").arg(QFileInfo(source).fileName());
+    } else {
+      QImage result = TouchUp::apply(image, steps);
+      if (!result.isNull() && factor > 0) {
+        result = Upscaler::upscale(result, factor, kMaxOutputPixels, &error, [this, jobId](qreal done) {
+          QMetaObject::invokeMethod(this, [this, done, jobId] { emit touchUpProgress(done, jobId); },
+                                    Qt::QueuedConnection);
+        });
+      }
+      if (!error.isEmpty()) {
+        // Upscaling said why.
+      } else if (result.isNull()) {
+        error = QStringLiteral("That touch-up left nothing to save");
+      } else {
+        output = writeImage(result, composedOutputPath(source, false), writableFormat(source));
+        if (output.isEmpty()) {
+          error = QStringLiteral("Could not safely save a copy beside %1; check its folder")
+                      .arg(QFileInfo(source).fileName());
+        }
+      }
+    }
 
     QMetaObject::invokeMethod(
         this,
