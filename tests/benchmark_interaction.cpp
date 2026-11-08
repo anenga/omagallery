@@ -2,6 +2,7 @@
 // Frame submission is not physical presentation. Jumps are not wheel latency;
 // "cold" means a fresh application cache, not a cold OS filesystem cache.
 #include "actions/ActionLauncher.h"
+#include "actions/FileMover.h"
 #include "actions/ActionRegistry.h"
 #include "actions/ExternalEditors.h"
 #include "actions/TailscalePeers.h"
@@ -328,6 +329,7 @@ int main(int argc, char** argv) {
   shared->setContextProperty(u"Theme"_s, &theme); shared->setContextProperty(u"Settings"_s, &settings);
   shared->setContextProperty(u"Actions"_s, &actions); shared->setContextProperty(u"Registry"_s, &registry);
   shared->setContextProperty(u"Editors"_s, new ExternalEditors(&actions, &engine));
+  shared->setContextProperty(u"Mover"_s, new FileMover(&engine));
   shared->setContextProperty(u"DemoMode"_s, false);
   MprisService mpris(&settings, QDBusConnection(QString()));
   shared->setContextProperty(u"Mpris"_s, &mpris);

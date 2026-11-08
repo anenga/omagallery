@@ -12,6 +12,7 @@
 #include "actions/ActionLauncher.h"
 #include "actions/ActionRegistry.h"
 #include "actions/ExternalEditors.h"
+#include "actions/FileMover.h"
 #include "actions/TailscalePeers.h"
 #include "app/AppSettings.h"
 #include "app/DemoLibrary.h"
@@ -316,6 +317,7 @@ private slots:
     context->setContextProperty(QStringLiteral("Settings"), m_settings);
     context->setContextProperty(QStringLiteral("Registry"), m_registry);
     context->setContextProperty(QStringLiteral("Editors"), new ExternalEditors(m_actions, m_engine));
+    context->setContextProperty(QStringLiteral("Mover"), new FileMover(m_engine));
     context->setContextProperty(QStringLiteral("Matte"), m_matte);
     context->setContextProperty(QStringLiteral("ImageEdit"), m_imageEditor);
     context->setContextProperty(QStringLiteral("TextIndex"), m_textIndex);

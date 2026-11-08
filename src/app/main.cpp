@@ -1,4 +1,5 @@
 #include "actions/ActionLauncher.h"
+#include "actions/FileMover.h"
 #include "actions/ActionRegistry.h"
 #include "actions/ExternalEditors.h"
 #include "actions/TailscalePeers.h"
@@ -553,6 +554,7 @@ int main(int argc, char* argv[]) {
   ActionLauncher actions;
   ActionRegistry registry(&actions);
   ExternalEditors editors(&actions);
+  FileMover mover;
 
   QQmlApplicationEngine engine;
   auto* thumbnailProvider = new ThumbnailProvider;
@@ -573,6 +575,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("Settings"), &settings);
   engine.rootContext()->setContextProperty(QStringLiteral("Registry"), &registry);
   engine.rootContext()->setContextProperty(QStringLiteral("Editors"), &editors);
+  engine.rootContext()->setContextProperty(QStringLiteral("Mover"), &mover);
   engine.rootContext()->setContextProperty(QStringLiteral("DemoMode"), demo);
   // A render never appears as a player on the desktop's session bus.
   MprisService mpris(&settings, rendering ? std::optional(QDBusConnection(QString())) : std::nullopt);

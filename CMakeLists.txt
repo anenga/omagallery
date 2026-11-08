@@ -57,6 +57,8 @@ add_library(omaroll_core STATIC
   src/actions/ActionRegistry.cpp
   src/actions/ActionRegistry.h
   src/actions/ExternalEditors.cpp
+  src/actions/FileMover.cpp
+  src/actions/FileMover.h
   src/actions/ExternalEditors.h
   src/actions/TailscalePeers.cpp
   src/actions/TailscalePeers.h
@@ -261,6 +263,9 @@ if(BUILD_TESTING)
   qt_add_executable(omaroll_desktop_action_tests tests/tst_desktop_actions.cpp)
   target_link_libraries(omaroll_desktop_action_tests PRIVATE omaroll_core Qt6::Test)
   add_test(NAME omaroll_desktop_action_tests COMMAND omaroll_desktop_action_tests)
+  qt_add_executable(omaroll_file_mover_tests tests/tst_file_mover.cpp)
+  target_link_libraries(omaroll_file_mover_tests PRIVATE omaroll_core Qt6::Test)
+  add_test(NAME omaroll_file_mover_tests COMMAND omaroll_file_mover_tests)
   qt_add_executable(omaroll_companion_tests tests/tst_companions.cpp)
   target_link_libraries(omaroll_companion_tests PRIVATE omaroll_core Qt6::Test)
   add_test(NAME omaroll_companion_tests COMMAND omaroll_companion_tests)

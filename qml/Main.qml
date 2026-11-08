@@ -603,6 +603,24 @@ ApplicationWindow {
         return target
     }
 
+    // A RAW+JPEG pair travels together, so the RAW is not left behind.
+    function moveToFolder(paths, folder) {
+        const sources = []
+        for (const path of paths) {
+            const row = Captures.rowOf(path)
+            const entry = row >= 0 ? Captures.deletionPathAt(row) : path
+            sources.push(entry === "" ? path : entry)
+            const companion = row >= 0 ? Captures.companionPathAt(row) : ""
+            if (companion !== "") sources.push(companion)
+        }
+        if (Mover.moveFiles(sources, folder)) {
+            const name = folder.substring(folder.lastIndexOf("/") + 1)
+            root.say("Moving " + (paths.length === 1 ? "1 item" : paths.length + " items") + " to " + name)
+        } else if (Mover.busy) {
+            root.say("Wait for the current move to finish")
+        }
+    }
+
     function requestDelete(path) {
         if (path === "") return
         const target = root.captureTrashTarget(path)
@@ -1075,6 +1093,7 @@ ApplicationWindow {
         onAddFolderRequested: libraryBrowser.addFolder()
         onGridFocusRequested: library.forceActiveFocus()
         onMessage: function(text) { root.say(text) }
+        onMoveRequested: function(paths, folder) { root.moveToFolder(paths, folder) }
         onVisibleChanged: if (!visible && activeFocus) library.forceActiveFocus()
     }
 
@@ -1754,6 +1773,25 @@ ApplicationWindow {
         id: noticeTimer
         interval: 4200
         onTriggered: notice.text = ""
+    }
+
+    Connections {
+        target: Mover
+        function onFinished(folder, moved, failed) {
+            for (const move of moved) {
+                Settings.relocatePath(move.from, move.to)
+                if (library.isChecked(move.from)) library.toggleChecked(move.from)
+            }
+            const newPaths = new Map(moved.map(function (move) { return [move.from, move.to] }))
+            root.viewerPaths = root.viewerPaths.map(function (path) { return newPaths.get(path) || path })
+            const name = folder.substring(folder.lastIndexOf("/") + 1)
+            const count = moved.length === 1 ? "1 file" : moved.length + " files"
+            if (failed.length === 0) root.say("Moved " + count + " to " + name)
+            else if (moved.length === 0) root.say(failed[0].error)
+            else root.say("Moved " + count + " to " + name + "; " + failed.length
+                          + " could not be moved: " + failed[0].error)
+            if (moved.length > 0) Library.refresh()
+        }
     }
 
     Connections {
