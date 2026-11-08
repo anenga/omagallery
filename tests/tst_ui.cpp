@@ -23,6 +23,7 @@
 #include "library/CaptureModel.h"
 #include "library/DuplicateIndex.h"
 #include "library/MediaMetadataIndex.h"
+#include "library/AspectIndex.h"
 #include "library/CaptureRoles.h"
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
@@ -256,6 +257,8 @@ private slots:
     m_mediaInfo = new MediaInspector(this);
     m_pdfInfo = new PdfInspector(this);
     m_mediaMetadata = new MediaMetadataIndex(nullptr, this);
+    m_aspects = new AspectIndex(this);
+    m_library->setAspectIndex(m_aspects);
     m_actions = new ActionLauncher(this);
     m_registry = new ActionRegistry(m_actions, this);
     m_tailscale = new TailscalePeers(this);
@@ -328,6 +331,7 @@ private slots:
     context->setContextProperty(QStringLiteral("MediaInfo"), m_mediaInfo);
     context->setContextProperty(QStringLiteral("PdfInfo"), m_pdfInfo);
     context->setContextProperty(QStringLiteral("MediaMetadata"), m_mediaMetadata);
+    context->setContextProperty(QStringLiteral("Aspects"), m_aspects);
     context->setContextProperty(QStringLiteral("Tailscale"), m_tailscale);
     context->setContextProperty(QStringLiteral("DemoMode"), true);
     // Without a bus connection, so playback never reaches the desktop's.
@@ -1528,6 +1532,7 @@ private slots:
     context->setContextProperty(QStringLiteral("Captures"), &thumbnailCaptures);
     context->setContextProperty(QStringLiteral("Library"), m_captures);
     context->setContextProperty(QStringLiteral("MediaMetadata"), m_mediaMetadata);
+    context->setContextProperty(QStringLiteral("Aspects"), m_aspects);
     QStringList warnings;
     connect(&engine, &QQmlEngine::warnings, &engine, [&warnings](const QList<QQmlError>& errors) {
       for (const auto& error : errors) warnings.append(error.toString());
@@ -5509,6 +5514,87 @@ private slots:
   // A small tiled window with large tiles cuts the visible rows off at the
   // bottom. Double-clicking a partly visible tile must open that tile, not
   // whatever the view scrolled under the pointer after the first click.
+  void galleryViewShowsWholePicturesAndKeepsTheCurrentOne() {
+    QQuickItem* grid = item("library");
+    QQuickItem* gallery = item("gallery");
+    QVERIFY(grid);
+    QVERIFY(gallery);
+    const auto restore = qScopeGuard([&] {
+      m_settings->setGalleryView(false);
+      QTest::qWait(300);
+    });
+    QVERIFY(m_library->rowCount() > 4);
+    grid->setProperty("currentIndex", 3);
+    const QString current = pathAt(3);
+
+    m_settings->setGalleryView(true);
+    QTRY_VERIFY_WITH_TIMEOUT(gallery->isVisible() &&
+                                 gallery->property("layout").toMap().value(
+                                     QStringLiteral("ys")).toList().size() == m_library->rowCount(),
+                             5000);
+    QCOMPARE(grid->property("currentIndex").toInt(), 3);
+    QCOMPARE(grid->property("count").toInt(), m_library->rowCount());
+
+    // Every tile on screen is drawn with the whole picture inside it, at the
+    // picture's own shape once its thumbnail is in.
+    const auto wholeTiles = [&]() {
+      int shown = 0;
+      std::function<void(QQuickItem*)> walk = [&](QQuickItem* node) {
+        for (QQuickItem* child : node->childItems()) {
+          if (child->objectName() == QStringLiteral("captureThumbnail") && child->isVisible()) {
+            if (child->property("fillMode").toInt() != 1) return; // PreserveAspectFit
+            ++shown;
+          }
+          walk(child);
+        }
+      };
+      walk(gallery);
+      return shown;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(wholeTiles() > 0, 5000);
+
+    // Right steps to the next picture, as in the card grid.
+    gallery->forceActiveFocus();
+    QTest::keyClick(m_window, Qt::Key_Right);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 4, 2000);
+    QTest::keyClick(m_window, Qt::Key_Left);
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("currentIndex").toInt(), 3, 2000);
+
+    // Delete asks to trash the picture under the pointer, not the current one.
+    QQuickItem* hovered = nullptr;
+    const qreal top = gallery->property("contentY").toReal();
+    for (QQuickItem* child : gallery->property("contentItem").value<QQuickItem*>()->childItems()) {
+      const QString path = child->property("path").toString();
+      if (child->property("gallery").toBool() && child->isVisible() && !path.isEmpty() &&
+          path != current && child->y() >= top &&
+          child->y() + child->height() <= top + gallery->height()) {
+        hovered = child;
+        break;
+      }
+    }
+    QVERIFY(hovered);
+    const QString hoveredPath = hovered->property("path").toString();
+    QTest::mouseMove(m_window, hovered->mapToScene(QPointF(hovered->width() / 2,
+                                                           hovered->height() / 2)).toPoint());
+    QTRY_COMPARE_WITH_TIMEOUT(grid->property("hoveredPath").toString(), hoveredPath, 2000);
+    QTest::keyClick(m_window, Qt::Key_Delete);
+    QQuickItem* confirm = item("confirm");
+    QTRY_VERIFY(confirm->isVisible());
+    QCOMPARE(confirm->property("detail").toString(), hoveredPath);
+    QTest::keyClick(m_window, Qt::Key_Escape);
+    QTRY_VERIFY(!confirm->isVisible());
+    QVERIFY(QFileInfo::exists(hoveredPath));
+    QTest::mouseMove(m_window, QPoint(1, 1));
+    gallery->forceActiveFocus();
+
+    // G switches back, still on the same picture.
+    QTest::keyClick(m_window, Qt::Key_G);
+    QTRY_VERIFY_WITH_TIMEOUT(!m_settings->galleryView(), 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(!gallery->isVisible(), 2000);
+    QCOMPARE(grid->property("currentIndex").toInt(), 3);
+    QCOMPARE(pathAt(grid->property("currentIndex").toInt()), current);
+  }
+
   void doubleClickOnAPartlyVisibleTileOpensThatTile() {
     QQuickItem* grid = item("library");
     QQuickItem* detail = item("detail");
@@ -5882,6 +5968,7 @@ private:
   MediaInspector* m_mediaInfo = nullptr;
   PdfInspector* m_pdfInfo = nullptr;
   MediaMetadataIndex* m_mediaMetadata = nullptr;
+  AspectIndex* m_aspects = nullptr;
   ThumbnailProvider* m_thumbnails = nullptr;
   MatteProvider* m_mattes = nullptr;
   EditProvider* m_edits = nullptr;

@@ -727,6 +727,10 @@ ApplicationWindow {
         library.currentIndex = 0
         if (view === "grid-filenames") {
             Settings.showGridFilenames = true
+        } else if (view === "gallery") {
+            Settings.galleryView = true
+        } else if (view === "grid") {
+            Settings.galleryView = false
         } else if (view === "context-menu") {
             root.openContextMenu(0, 100, 100)
         } else if (view === "selection-menu") {
@@ -906,6 +910,16 @@ ApplicationWindow {
                 shortcut: "F9"
                 active: Settings.showFolderSidebar
                 onClicked: Settings.showFolderSidebar = !Settings.showFolderSidebar
+            }
+            IconButton {
+                objectName: "galleryViewToggle"
+                anchors.verticalCenter: parent.verticalCenter
+                label: "Gallery"
+                enabled: !root.popupOpen
+                toolTip: Settings.galleryView ? "Show the card grid" : "Show the photo gallery"
+                shortcut: "G"
+                active: Settings.galleryView
+                onClicked: Settings.galleryView = !Settings.galleryView
             }
             PillButton {
                 objectName: "selectionActionsButton"
@@ -2022,6 +2036,11 @@ ApplicationWindow {
         autoRepeat: false
         enabled: !root.anySheetOpen && !root.popupOpen && !filters.searchActive
         onActivated: Settings.showFolderSidebar = !Settings.showFolderSidebar
+    }
+    Shortcut {
+        sequences: ["G"]
+        enabled: !root.anySheetOpen && !root.popupOpen && !filters.searchActive
+        onActivated: Settings.galleryView = !Settings.galleryView
     }
     // Tile size, the way every browser and file manager does it.
     Shortcut {

@@ -15,6 +15,7 @@
 #include "library/CaptureModel.h"
 #include "library/DuplicateIndex.h"
 #include "library/MediaMetadataIndex.h"
+#include "library/AspectIndex.h"
 #include "library/MediaInspector.h"
 #include "library/SimilarityIndex.h"
 #include "edit/EditProvider.h"
@@ -171,7 +172,7 @@ Options:
                          your own files. Nothing personal appears on screen.
   --render <file.png>    Render the window to a PNG and exit. Draws offscreen,
                          so no compositor can resize it or overlap it.
-  --render-view <view>   Which view to render: grid, detail, video, slideshow,
+  --render-view <view>   Which view to render: grid, gallery, detail, video, slideshow,
                          matte, corrections, compare, export, rename, OCR,
                          editors, pins, context-menu, selection-menu,
                          duplicates, browser, sidebar, settings, viewer, viewer-video,
@@ -211,6 +212,7 @@ public:
         // Demo and render order is deliberately fixed. Real libraries are
         // enriched in the background after their fast filesystem scan lands.
         m_mediaMetadata(demo ? nullptr : &m_captures),
+        m_aspects(nullptr, !demo),
         m_textIndex(&m_captures),
         m_qr(&m_captures),
         m_duplicates(&m_captures),
@@ -219,6 +221,7 @@ public:
     // QML only ever sees the proxy, so sorting and filtering can change
     // without any delegate knowing.
     m_library.setSourceModel(&m_captures);
+    m_library.setAspectIndex(&m_aspects);
     QObject::connect(&m_library, &CaptureFilterModel::searchTextChanged, &m_textIndex,
                      [this] { m_textIndex.setSearchText(m_library.searchText()); });
     QObject::connect(&m_textIndex, &OcrIndex::textReady, &m_library,
@@ -248,6 +251,25 @@ public:
     QObject::connect(&m_library, &CaptureFilterModel::showHiddenChanged, &settings,
                      [this, &settings] { settings.setShowHidden(m_library.showHidden()); });
 
+    // The folder on screen is read first, so its dates settle while the
+    // rest of the library waits its turn in the background.
+    m_priorityTimer.setSingleShot(true);
+    m_priorityTimer.setInterval(250);
+    QObject::connect(&m_priorityTimer, &QTimer::timeout, &m_mediaMetadata, [this] {
+      QSet<QString> paths;
+      const int rows = m_library.rowCount();
+      if (rows < m_captures.rowCount()) {
+        paths.reserve(rows);
+        for (int row = 0; row < rows; ++row) paths.insert(m_library.pathAt(row));
+      }
+      m_mediaMetadata.prioritize(paths);
+    });
+    const auto viewChanged = [this] { m_priorityTimer.start(); };
+    QObject::connect(&m_library, &QAbstractItemModel::modelReset, &m_priorityTimer, viewChanged);
+    QObject::connect(&m_library, &QAbstractItemModel::layoutChanged, &m_priorityTimer, viewChanged);
+    QObject::connect(&m_library, &QAbstractItemModel::rowsInserted, &m_priorityTimer, viewChanged);
+    QObject::connect(&m_library, &QAbstractItemModel::rowsRemoved, &m_priorityTimer, viewChanged);
+
     m_folderTree.bind(&m_captures, &m_library);
     add(request);
 
@@ -272,6 +294,7 @@ public:
     m_context.setContextProperty(QStringLiteral("MediaInfo"), &m_mediaInfo);
     m_context.setContextProperty(QStringLiteral("PdfInfo"), &m_pdfInfo);
     m_context.setContextProperty(QStringLiteral("MediaMetadata"), &m_mediaMetadata);
+    m_context.setContextProperty(QStringLiteral("Aspects"), &m_aspects);
     m_context.setContextProperty(QStringLiteral("Tailscale"), &m_tailscale);
     m_context.setContextProperty(QStringLiteral("InitialPaths"), request.files);
     m_context.setContextProperty(QStringLiteral("InitialFolderPath"), request.folder);
@@ -281,6 +304,7 @@ public:
   void requestStop() {
     m_captures.requestStop();
     m_mediaMetadata.requestStop();
+    m_aspects.requestStop();
     m_textIndex.requestStop();
     m_duplicates.requestStop();
     m_similarities.requestStop();
@@ -323,6 +347,8 @@ private:
 
   CaptureModel m_captures;
   MediaMetadataIndex m_mediaMetadata;
+  QTimer m_priorityTimer;
+  AspectIndex m_aspects;
   CaptureFilterModel m_library;
   FolderTreeModel m_folderTree;
   OcrIndex m_textIndex;
@@ -444,7 +470,7 @@ int main(int argc, char* argv[]) {
   }
   const QString renderView = optionValue(arguments, QStringLiteral("--render-view"));
   static const QStringList renderViews = {
-      QStringLiteral("grid"),       QStringLiteral("grid-filenames"),
+      QStringLiteral("grid"),       QStringLiteral("grid-filenames"), QStringLiteral("gallery"),
       QStringLiteral("detail"),     QStringLiteral("document"),
       QStringLiteral("video"),
       QStringLiteral("slideshow"),  QStringLiteral("matte"),   QStringLiteral("corrections"),
