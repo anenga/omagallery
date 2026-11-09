@@ -14,6 +14,8 @@
 #include <QJsonObject>
 #include "library/CaptureFilterModel.h"
 #include "library/FolderTreeModel.h"
+#include "library/AspectIndex.h"
+#include "library/GalleryLayout.h"
 #include <QAbstractItemModelTester>
 #include "library/CaptureModel.h"
 #include "library/CaptureRoles.h"
@@ -230,6 +232,78 @@ class OmarollTest : public QObject {
   Q_OBJECT
 
 private slots:
+  void galleryMasonryShowsEveryPictureWhole() {
+    // 1000px wide with 240px columns and 8px gaps: four columns.
+    const QList<double> ratios = {1.5, 0.5, 1.0, 2.0, 0.75, 1.5};
+    const GalleryLayout::Masonry laid =
+        GalleryLayout::masonry(ratios, {}, 1000, 240, 8, 40);
+    QCOMPARE(laid.columns, 4);
+    QCOMPARE(laid.rects.size(), ratios.size());
+    QVERIFY(laid.headers.isEmpty());
+    const double column = (1000 - 8 * 3) / 4.0;
+    QCOMPARE(laid.columnWidth, column);
+    double previousTop = -1;
+    for (int i = 0; i < ratios.size(); ++i) {
+      const QRectF rect = laid.rects.at(i);
+      // Each picture keeps its own shape, so nothing is cropped.
+      QCOMPARE(rect.width(), column);
+      QVERIFY(qAbs(rect.height() - std::round(column / ratios.at(i))) < 0.01);
+      QVERIFY(rect.right() <= 1000.01);
+      // Tops never decrease in model order; the view searches on that.
+      QVERIFY(rect.y() >= previousTop);
+      previousTop = rect.y();
+    }
+    // The fifth picture goes under the shortest of the first row, the 2:1.
+    QCOMPARE(laid.rects.at(4).x(), laid.rects.at(3).x());
+    QCOMPARE(laid.rects.at(4).y(), laid.rects.at(3).bottom() + 8);
+  }
+
+  void galleryMasonryStartsEachGroupUnderItsHeader() {
+    const QList<double> ratios = {1.0, 0.5, 1.0, 1.0};
+    const QStringList labels = {QStringLiteral("Today"), QStringLiteral("Today"),
+                                QStringLiteral("Yesterday"), QStringLiteral("Yesterday")};
+    const GalleryLayout::Masonry laid = GalleryLayout::masonry(ratios, labels, 400, 190, 10, 40);
+    QCOMPARE(laid.columns, 2);
+    QCOMPARE(laid.headers.size(), 2);
+    QCOMPARE(laid.headers.at(0).label, QStringLiteral("Today"));
+    QCOMPARE(laid.headers.at(0).y, 0.0);
+    QCOMPARE(laid.rects.at(0).y(), 40.0);
+    // The second group starts below the taller column of the first.
+    QVERIFY(laid.headers.at(1).y >= laid.rects.at(1).bottom());
+    QCOMPARE(laid.rects.at(2).y(), laid.headers.at(1).y + 40);
+    QCOMPARE(laid.rects.at(3).y(), laid.rects.at(2).y());
+    QVERIFY(laid.height >= laid.rects.at(3).bottom());
+    // Extreme shapes are bounded so a strip cannot swallow the screen.
+    const GalleryLayout::Masonry strip = GalleryLayout::masonry({0.01}, {}, 200, 200, 0, 0);
+    QCOMPARE(strip.rects.first().height(), std::round(200 / GalleryLayout::kMinimumRatio));
+    QVERIFY(GalleryLayout::masonry({}, {}, 1000, 200, 4, 0).rects.isEmpty());
+    QVERIFY(GalleryLayout::masonry({1.5}, {}, 0, 200, 4, 0).rects.isEmpty());
+  }
+
+  void aspectIndexReadsPictureShapes() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString tall = dir.filePath(QStringLiteral("tall.png"));
+    QImage image(200, 400, QImage::Format_RGB32);
+    image.fill(Qt::gray);
+    QVERIFY(image.save(tall));
+    QCOMPARE(AspectIndex::readRatio(tall), 0.5);
+    QCOMPARE(AspectIndex::readRatio(dir.filePath(QStringLiteral("missing.png"))), 0.0);
+
+    AspectIndex index;
+    QCOMPARE(index.ratio(tall, 1, true, false), AspectIndex::kVideoRatio);
+    QCOMPARE(index.ratio(tall, 1, false, true), AspectIndex::kDocumentRatio);
+    // Unknown until read in the background, then the real shape.
+    QCOMPARE(index.ratio(tall, 1, false, false), AspectIndex::kPhotoRatio);
+    QSignalSpy changed(&index, &AspectIndex::ratiosChanged);
+    QVERIFY(changed.wait(5000));
+    QCOMPARE(index.ratio(tall, 1, false, false), 0.5);
+    // A shape learned from a thumbnail covers what headers cannot.
+    index.learn(tall, 1, 0.8);
+    QCOMPARE(index.ratio(tall, 1, true, false), 0.8);
+    QCOMPARE(index.ratio(tall, 2, true, false), AspectIndex::kVideoRatio);
+  }
+
   void playbackEnvironment_data() {
     QTest::addColumn<bool>("decodeSet");
     QTest::addColumn<QString>("decode");
@@ -1493,6 +1567,8 @@ private slots:
     settings.setThumbnailCacheMb(512);
     settings.setTileWidth(320);
     settings.setSlideshowVideos(true);
+    QVERIFY(!settings.galleryView());
+    settings.setGalleryView(true);
 
     const QString unavailable = dir.path();
     QVERIFY(QDir(unavailable).removeRecursively());
@@ -1502,6 +1578,8 @@ private slots:
     QCOMPARE(restored.videoPrimaryAction(), QStringLiteral("play"));
     QCOMPARE(restored.thumbnailCacheMb(), 512);
     QCOMPARE(restored.tileWidth(), 320);
+    QVERIFY(restored.galleryView());
+    restored.setGalleryView(false);
     restored.setTileWidth(10);
     QCOMPARE(restored.tileWidth(), 160);
     restored.setTileWidth(5000);

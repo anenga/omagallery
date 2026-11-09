@@ -47,6 +47,9 @@ class AppSettings final : public QObject {
   Q_PROPERTY(int tileWidth READ tileWidth WRITE setTileWidth NOTIFY tileWidthChanged)
   Q_PROPERTY(bool showGridFilenames READ showGridFilenames WRITE setShowGridFilenames NOTIFY
                  showGridFilenamesChanged)
+  // Gallery lays the library out in justified rows that keep each picture's
+  // own shape. Off keeps the uniform card grid.
+  Q_PROPERTY(bool galleryView READ galleryView WRITE setGalleryView NOTIFY galleryViewChanged)
   Q_PROPERTY(bool showFolderSidebar READ showFolderSidebar WRITE setShowFolderSidebar NOTIFY showFolderSidebarChanged)
   Q_PROPERTY(int folderSidebarWidth READ folderSidebarWidth WRITE setFolderSidebarWidth NOTIFY folderSidebarWidthChanged)
   Q_PROPERTY(int previewWidth READ previewWidth WRITE setPreviewWidth NOTIFY previewWidthChanged)
@@ -126,6 +129,8 @@ public:
   void setTileWidth(int width);
   [[nodiscard]] bool showGridFilenames() const { return m_showGridFilenames; }
   void setShowGridFilenames(bool value);
+  [[nodiscard]] bool galleryView() const { return m_galleryView; }
+  void setGalleryView(bool value);
   [[nodiscard]] bool showFolderSidebar() const { return m_showFolderSidebar; }
   void setShowFolderSidebar(bool value);
   [[nodiscard]] int folderSidebarWidth() const { return m_folderSidebarWidth; }
@@ -265,6 +270,7 @@ signals:
   void thumbnailCacheMbChanged();
   void tileWidthChanged();
   void showGridFilenamesChanged();
+  void galleryViewChanged();
   void showFolderSidebarChanged();
   void folderSidebarWidthChanged();
   void previewWidthChanged();
@@ -357,6 +363,7 @@ private:
   int m_thumbnailCacheMb = 256;
   int m_tileWidth = 240;
   bool m_showGridFilenames = false;
+  bool m_galleryView = false;
   bool m_showFolderSidebar = false;
   int m_folderSidebarWidth = 240;
   int m_previewWidth = 1000;

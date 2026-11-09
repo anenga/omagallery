@@ -327,6 +327,7 @@ void MediaMetadataIndex::sync() {
     }
   }
 
+  applyPriority();
   for (const CaptureModel::MetadataUpdate& update : std::as_const(cachedUpdates)) {
     m_pendingUpdates.insert(update.path, update);
   }
@@ -337,6 +338,18 @@ void MediaMetadataIndex::sync() {
     scheduleSave();
   }
   processNext();
+}
+
+void MediaMetadataIndex::prioritize(const QSet<QString>& paths) {
+  if (paths == m_priority) return;
+  m_priority = paths;
+  applyPriority();
+}
+
+void MediaMetadataIndex::applyPriority() {
+  if (m_priority.isEmpty() || m_queue.isEmpty()) return;
+  std::stable_partition(m_queue.begin(), m_queue.end(),
+                        [this](const Candidate& candidate) { return m_priority.contains(candidate.path); });
 }
 
 void MediaMetadataIndex::processNext() {

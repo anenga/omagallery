@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QBuffer>
 #include <QHash>
 #include <QImageReader>
 #include <QMutex>
@@ -82,6 +83,32 @@ void rememberFailure(const QString& key) {
   g_negativeUntil.insert(key, QDateTime::currentMSecsSinceEpoch() + kNegativeCacheMs);
 }
 
+// Files up to this size are read into memory before decoding.
+constexpr qint64 kWholeReadLimit = 64LL * 1024 * 1024;
+
+// Reads |path| into |bytes|, retrying a read that ends before the file's
+// size. Leaves |bytes| empty for a file too large to hold, which the caller
+// then streams. False when the file cannot be read whole or the request is
+// cancelled.
+bool readWhole(const QString& path, QByteArray& bytes, ThumbnailCache::Cancellation cancelled) {
+  constexpr int kAttempts = 3;
+  for (int attempt = 0; attempt < kAttempts; ++attempt) {
+    if (cancelled.isCancelled()) return false;
+    if (attempt > 0) QThread::msleep(250 * attempt);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) continue;
+    const qint64 expected = file.size();
+    if (expected > kWholeReadLimit) {
+      bytes.clear();
+      return true;
+    }
+    bytes = file.readAll();
+    if (expected > 0 && bytes.size() == expected) return true;
+  }
+  bytes.clear();
+  return false;
+}
+
 // Written as JPEG: these are opaque photographic tiles, and JPEG at 88 keeps a
 // large library's cache a fraction of the PNG equivalent.
 constexpr int kJpegQuality = 88;
@@ -131,9 +158,21 @@ void ThumbnailCache::prune(qint64 maxBytes) {
   }
 }
 
+QString ThumbnailCache::diskKeyFromVersion(const QString& version) {
+  const QStringList fields = version.split(QLatin1Char('-'));
+  if (fields.size() != 7) return {};
+  for (const QString& field : fields) {
+    bool okay = false;
+    field.toULongLong(&okay);
+    if (!okay) return {};
+  }
+  return fields.mid(2).join(QLatin1Char('-'));
+}
+
 QString ThumbnailCache::cacheKey(const QString& path, const QString& renderPath,
-                                 const QSize& pixelSize, int seekPercent) {
-  const QString version = FileVersion::diskKey(path);
+                                 const QSize& pixelSize, int seekPercent,
+                                 const QString& knownDiskKey) {
+  const QString version = knownDiskKey.isEmpty() ? FileVersion::diskKey(path) : knownDiskKey;
   const QString dependency = renderPath == path ? version : FileVersion::diskKey(renderPath);
   const QString identity = QStringLiteral("cover5|%1|%2|%3|%4|%5x%6|t%7")
                                .arg(path, version, renderPath, dependency)
@@ -143,7 +182,7 @@ QString ThumbnailCache::cacheKey(const QString& path, const QString& renderPath,
 }
 
 QImage ThumbnailCache::renderImage(const QString& path, const QSize& pixelSize, int seekPercent,
-                                  Cancellation cancelled) {
+                                  Cancellation cancelled, ImageOutcome* outcome) {
   if (isCancelled(cancelled)) {
     return {};
   }
@@ -153,8 +192,30 @@ QImage ThumbnailCache::renderImage(const QString& path, const QSize& pixelSize, 
     return CameraRaw::readPreview(path, pixelSize);
   }
 
-  QImageReader reader(path);
+  // Read the file whole and check it against its size before decoding. A
+  // network share can end a read early under load; decoded as it came, that
+  // was a grey-bottomed tile ("premature end of data segment") cached for
+  // good. A short read is retried instead. Huge files stream as before.
+  QByteArray bytes;
+  QBuffer buffer(&bytes);
+  QImageReader reader;
+  if (!readWhole(path, bytes, cancelled)) {
+    if (outcome) outcome->unreadable = true;
+    return {};
+  }
+  if (bytes.isEmpty()) {
+    reader.setFileName(path);
+  } else {
+    buffer.open(QIODevice::ReadOnly);
+    reader.setDevice(&buffer);
+  }
   reader.setAutoTransform(true);
+  // Only formats Qt itself decodes count: a plugin that recognizes a HEIC it
+  // then fails on still leaves ffmpegthumbnailer worth a try.
+  if (outcome) {
+    static const QList<QByteArray> builtIn = {"jpeg", "png", "gif", "bmp", "webp"};
+    outcome->recognized = builtIn.contains(reader.format());
+  }
 
   const QSize original = reader.size();
   if (original.isValid() && !original.isEmpty()) {
@@ -259,20 +320,38 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
 QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
                                  qreal devicePixelRatio, int seekPercent,
                                  Cancellation cancelled) {
-  if (isCancelled(cancelled) || path.isEmpty() || !QFileInfo::exists(path)) {
+  return thumbnail(path, logicalSize, devicePixelRatio, seekPercent, cancelled, {});
+}
+
+QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
+                                 qreal devicePixelRatio, int seekPercent,
+                                 Cancellation cancelled, const QString& knownVersion) {
+  if (isCancelled(cancelled) || path.isEmpty()) {
     return {};
   }
 
   const qreal ratio = std::clamp(devicePixelRatio, qreal(1.0), kMaxDevicePixelRatio);
-  const QSize pixelSize(static_cast<int>(std::ceil(logicalSize.width() * ratio)),
-                        static_cast<int>(std::ceil(logicalSize.height() * ratio)));
+  const bool wholeAtWidth = logicalSize.width() > 0 && logicalSize.height() <= 0;
+  const int pixelWidth = static_cast<int>(std::ceil(logicalSize.width() * ratio));
+  // The key's size. A whole-picture request is keyed by its width alone.
+  const QSize keySize(pixelWidth, wholeAtWidth ? 0
+                                               : static_cast<int>(std::ceil(logicalSize.height() * ratio)));
+  // What the renderers cover. A square box covers any shape at the width,
+  // and the result is brought down to the width below.
+  const QSize pixelSize = wholeAtWidth ? QSize(pixelWidth, pixelWidth) : keySize;
   if (pixelSize.isEmpty()) {
     return {};
   }
 
   const QString directory = cacheDirectory();
+  // A transcode shares its original's tile, which needs a look at the disk.
+  // Anything else is identified by the library's own record of it.
   const QString renderPath = ThumbnailSource::path(path);
-  const QString key = cacheKey(path, renderPath, pixelSize, seekPercent);
+  const QString knownDiskKey = renderPath == path ? diskKeyFromVersion(knownVersion) : QString();
+  if (knownDiskKey.isEmpty() && !QFileInfo::exists(path)) {
+    return {};
+  }
+  const QString key = cacheKey(path, renderPath, keySize, seekPercent, knownDiskKey);
   const QString cachePath = directory + QLatin1Char('/') + key + QStringLiteral(".jpg");
 
   QImage cached(cachePath);
@@ -281,6 +360,9 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
   }
   if (!cached.isNull()) {
     return cached;
+  }
+  if (!knownDiskKey.isEmpty() && !QFileInfo::exists(path)) {
+    return {};
   }
   // Older tiles have no ctime in their key. Reuse them only when the source
   // has not changed since the tile was written, including preserved-mtime saves.
@@ -299,7 +381,8 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
            (info.st_ctim.tv_sec == tileInfo.st_mtim.tv_sec &&
             info.st_ctim.tv_nsec <= tileInfo.st_mtim.tv_nsec);
   };
-  if (renderPath == path && ::stat(QFile::encodeName(legacyPath).constData(), &tileInfo) == 0 &&
+  if (!wholeAtWidth && renderPath == path &&
+      ::stat(QFile::encodeName(legacyPath).constData(), &tileInfo) == 0 &&
       unchanged(path)) {
     cached.load(legacyPath);
     if (!cached.isNull()) return isCancelled(cancelled) ? QImage{} : cached;
@@ -312,15 +395,20 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
   if (isCancelled(cancelled)) {
     return {};
   }
+  ImageOutcome imageOutcome;
   QImage rendered =
       CaptureScanner::isVideo(suffix)      ? renderVideo(renderPath, pixelSize, seekPercent, cancelled)
       : CaptureScanner::isDocument(suffix) ? PdfSupport::renderPage(renderPath, 1, pixelSize * 2)
-                                           : renderImage(renderPath, pixelSize, seekPercent, cancelled);
+                                           : renderImage(renderPath, pixelSize, seekPercent, cancelled,
+                                                         &imageOutcome);
   if (isCancelled(cancelled)) {
     return {};
   }
+  // A picture the share failed to deliver is not a video; asking
+  // ffmpegthumbnailer only spent its timeout before giving up.
   if (rendered.isNull() && !CaptureScanner::isVideo(suffix) &&
-      !CaptureScanner::isDocument(suffix)) {
+      !CaptureScanner::isDocument(suffix) && !imageOutcome.unreadable &&
+      !imageOutcome.recognized) {
     // Video bytes under an image name happen; ffmpegthumbnailer can read it.
     rendered = renderVideo(renderPath, pixelSize, seekPercent, cancelled);
   }
@@ -338,13 +426,22 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
     return {};
   }
   if (rendered.isNull()) {
-    rememberFailure(key);
+    // A read that failed is worth asking again soon; a file that was read
+    // and still gave nothing is not.
+    if (!imageOutcome.unreadable) rememberFailure(key);
     return {};
   }
 
-  // Scale down until the short side meets the tile. Only when both sides
-  // overhang: otherwise expanding to cover would be an upscale.
-  if (rendered.width() > pixelSize.width() && rendered.height() > pixelSize.height()) {
+  if (wholeAtWidth) {
+    // The whole picture at the requested width, never cropped. An extreme
+    // strip is bounded by height instead, still whole.
+    const QSize bound(pixelWidth, pixelWidth * 8);
+    if (rendered.width() > bound.width() || rendered.height() > bound.height()) {
+      rendered = rendered.scaled(bound, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+  } else if (rendered.width() > pixelSize.width() && rendered.height() > pixelSize.height()) {
+    // Scale down until the short side meets the tile. Only when both sides
+    // overhang: otherwise expanding to cover would be an upscale.
     rendered = rendered.scaled(pixelSize, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
   }
   if (isCancelled(cancelled)) {
@@ -357,7 +454,7 @@ QImage ThumbnailCache::thumbnail(const QString& path, const QSize& logicalSize,
   // limit it would not draw at all.
   const int maxWidth = pixelSize.width() * 2;
   const int maxHeight = pixelSize.height() * 2;
-  if (rendered.width() > maxWidth || rendered.height() > maxHeight) {
+  if (!wholeAtWidth && (rendered.width() > maxWidth || rendered.height() > maxHeight)) {
     const int width = std::min(rendered.width(), maxWidth);
     const int height = std::min(rendered.height(), maxHeight);
     rendered = rendered.copy((rendered.width() - width) / 2, (rendered.height() - height) / 2,

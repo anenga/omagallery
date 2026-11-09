@@ -45,6 +45,26 @@ public:
                                         qreal devicePixelRatio, int seekPercent,
                                         Cancellation cancelled);
 
+  // As above, with two additions for large folders on slow disks.
+  //
+  // knownVersion is the file's FileVersion::thumbnailKey from the library
+  // scan. When given, a cached tile is found without touching the source
+  // file at all, which on a network share saves a round trip or three per
+  // tile.
+  //
+  // A logicalSize with no height asks for the whole picture at that width
+  // rather than a cover crop of a box. Its cache entry does not depend on
+  // the picture's shape, so a gallery whose tiles change height as shapes
+  // are learned keeps hitting the same tile.
+  [[nodiscard]] static QImage thumbnail(const QString& path, const QSize& logicalSize,
+                                        qreal devicePixelRatio, int seekPercent,
+                                        Cancellation cancelled, const QString& knownVersion);
+
+  // The disk part of a thumbnailKey ("dev-ino-size-mtime-ctime" with
+  // nanoseconds): what cacheKey would read from stat. Empty when the string
+  // is not such a key.
+  [[nodiscard]] static QString diskKeyFromVersion(const QString& version);
+
   [[nodiscard]] static QString cacheDirectory();
 
   // Cache ceiling. A thumbnail is always rebuildable, so bounding the directory
@@ -56,10 +76,17 @@ public:
   static void prune(qint64 maxBytes = kMaxCacheBytes);
 
 private:
+  // Why a picture gave no image, so the caller knows what is worth trying.
+  struct ImageOutcome {
+    bool unreadable = false; // the file could not be read whole: try again later
+    bool recognized = false; // its bytes are a format Qt decodes itself
+  };
   [[nodiscard]] static QImage renderImage(const QString& path, const QSize& pixelSize,
-                                          int seekPercent, Cancellation cancelled);
+                                          int seekPercent, Cancellation cancelled,
+                                          ImageOutcome* outcome = nullptr);
   [[nodiscard]] static QImage renderVideo(const QString& path, const QSize& pixelSize,
                                           int seekPercent, Cancellation cancelled);
   [[nodiscard]] static QString cacheKey(const QString& path, const QString& renderPath,
-                                        const QSize& pixelSize, int seekPercent);
+                                        const QSize& pixelSize, int seekPercent,
+                                        const QString& knownDiskKey = {});
 };

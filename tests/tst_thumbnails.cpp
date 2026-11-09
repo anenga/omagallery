@@ -1,3 +1,4 @@
+#include "sources/FileVersion.h"
 #include "thumbs/ThumbnailCache.h"
 #include "thumbs/ThumbnailProvider.h"
 
@@ -114,6 +115,58 @@ private slots:
                qPrintable(QStringLiteral("pass %1: %2").arg(pass).arg(color.name())));
     }
     QCOMPARE(cacheFiles().size(), 1);
+  }
+
+  // A gallery tile asks for the whole picture at a width, uncropped, and its
+  // cache entry is the same whatever height the tile has.
+  void wholePictureAtAWidthIsNeverCropped() {
+    const QString path = mediaPath(QStringLiteral("panorama.png"));
+    QImage image(800, 200, QImage::Format_RGB32);
+    image.fill(Qt::darkGreen);
+    QVERIFY(image.save(path));
+    const QImage tile = ThumbnailCache::thumbnail(path, QSize(100, 0), 1);
+    QCOMPARE(tile.size(), QSize(100, 25));
+    const QImage tall = ThumbnailCache::thumbnail(path, QSize(100, -1), 1);
+    QCOMPARE(tall.size(), QSize(100, 25));
+    QCOMPARE(cacheFiles().size(), 1);
+  }
+
+  // With the library's version of the file, a cached tile is served without
+  // looking at the source, which is what keeps a network share fast.
+  void knownVersionFindsTheTileWithoutTheSource() {
+    QCOMPARE(ThumbnailCache::diskKeyFromVersion(QStringLiteral("1-2-3-4-5-6-7")),
+             QStringLiteral("3-4-5-6-7"));
+    QVERIFY(ThumbnailCache::diskKeyFromVersion(QStringLiteral("1725200000")).isEmpty());
+    QVERIFY(ThumbnailCache::diskKeyFromVersion(QStringLiteral("1-2-3-4-5-6-x")).isEmpty());
+
+    const QString path = mediaPath(QStringLiteral("shot.png"));
+    QImage image(120, 80, QImage::Format_RGB32);
+    image.fill(Qt::darkBlue);
+    QVERIFY(image.save(path));
+    const QString version = FileVersion::thumbnailKey(path);
+    QVERIFY(!ThumbnailCache::thumbnail(path, QSize(60, 0), 1, 20, {}, version).isNull());
+    // The same tile as an unversioned request: the keys agree.
+    QVERIFY(!ThumbnailCache::thumbnail(path, QSize(60, 0), 1).isNull());
+    QCOMPARE(cacheFiles().size(), 1);
+
+    QVERIFY(QFile::remove(path));
+    QVERIFY(!ThumbnailCache::thumbnail(path, QSize(60, 0), 1, 20, {}, version).isNull());
+    QVERIFY(ThumbnailCache::thumbnail(path, QSize(60, 0), 1).isNull());
+  }
+
+  // A picture the disk will not hand over is asked for again later, and is
+  // never passed to the video helper, whose timeout only delayed the failure.
+  void unreadablePictureIsRetriedNotSentToTheVideoHelper() {
+    const QString path = mediaPath(QStringLiteral("unreadable.jpg"));
+    QVERIFY(QDir().mkpath(path)); // exists, but cannot be read as a file
+    QVERIFY(ThumbnailCache::thumbnail(path, QSize(32, 24), 1).isNull());
+    QCOMPARE(helperStarts(), 0);
+    QVERIFY(QDir().rmdir(path));
+    QImage image(64, 48, QImage::Format_RGB32);
+    image.fill(Qt::darkRed);
+    QVERIFY(image.save(path, "JPG"));
+    // Readable now, under a new identity or not: no failure was remembered.
+    QVERIFY(!ThumbnailCache::thumbnail(path, QSize(32, 24), 1).isNull());
   }
 
   void cancelledRequestDoesNotCacheOrSuppressRetry() {
